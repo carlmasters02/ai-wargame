@@ -27,6 +27,8 @@ EVASION_FACTOR = 0.4  # DEFENSE_EVASION multiplies future detection noise on tha
 FALSE_POSITIVE_RATE = 0.15
 MAX_HONEYPOTS = 3
 ALERT_WINDOW = 8
+STALE_INVESTIGATION = 3  # rounds until an INVESTIGATE verdict goes stale and may be re-run
+FP_KINDS = ("scan", "exploit", "lateral_move", "harvest_creds", "c2_beacon")  # FPs look like real alerts
 
 
 class GameEngine:
@@ -42,6 +44,8 @@ class GameEngine:
         self._task: asyncio.Task | None = None
         self._step = False
         self.agents = {"red": None, "blue": None}  # None -> heuristic policy
+        self.red_persona = "apt"  # survives resets, like the agents themselves
+        self._report_task: asyncio.Task | None = None
         self._clear()
 
     # ------------------------------------------------------------- state
@@ -67,7 +71,10 @@ class GameEngine:
         self.win_reason = ""
         self._patch_used_this_turn = False
         self.evasion: set[str] = set()  # hosts where RED wiped logs (detection noise reduced)
-        self.red_persona = "apt"
+        self._next_side = "red"
+        self._step = False
+        self._zd_count = 0
+        self.last_report: str | None = None
         self.rng = random.Random(0)
 
     def load_spec(self, spec: GraphSpec):
@@ -105,6 +112,11 @@ class GameEngine:
     # -------------------------------------------------------- graph mirror
     async def reset(self, seed: int):
         await self.stop()
+        if self._report_task and not self._report_task.done():
+            self._report_task.cancel()  # a late report must not land in (or stop recording) the next match
+        self._report_task = None
+        while not self.command_queue.empty():
+            self.command_queue.get_nowait()
         spec, used_seed = generator.generate_with_guarantee(seed)
         self.load_spec(spec)
         if self.mirror.enabled:
@@ -127,6 +139,7 @@ class GameEngine:
         self.bus.start_recording(tag=f"seed{used_seed}")
         await self._emit_snapshot()
         await self._emit_metrics()
+        await self.emit_state()
         log.info("game reset with seed %d (%d hosts)", used_seed, len(self.hosts))
 
     def snapshot(self) -> dict:
@@ -136,11 +149,8 @@ class GameEngine:
                  "os": h.os, "criticality": h.criticality, "compromised": h.compromised,
                  "isolated": h.isolated, "honeypot": h.honeypot,
                  "discovered": h.discovered, "crown": h.id == self.cj,
-                 "beacon": h.beacon,
-                 "vulns": [{"id": v.id, "cve": v.cve_label, "name": v.name, "sev": v.severity,
-                            "patched": v.patched, "zero_day": v.zero_day,
-                            "epss": v.epss, "kev": v.kev}
-                           for v in self._host_vulns(h.id)]}
+                 "beacon": h.beacon, "investigated": h.investigated,
+                 "vulns": self._vuln_rows(h.id)}
                 for h in self.hosts.values()
             ],
             "links": [{"source": e.src, "target": e.dst, "port": e.port,
@@ -148,7 +158,14 @@ class GameEngine:
             "crown_jewel": self.cj,
             "seed": self.spec.seed if self.spec else 0,
             "max_rounds": self.s.MAX_TURNS,
+            "round": self.round,
+            "actions": len(self.turns),
         }
+
+    def _vuln_rows(self, hid: str) -> list[dict]:
+        return [{"id": v.id, "cve": v.cve_label, "name": v.name, "sev": v.severity,
+                 "patched": v.patched, "zero_day": v.zero_day, "epss": v.epss, "kev": v.kev}
+                for v in self._host_vulns(hid)]
 
     async def _emit_snapshot(self):
         await self.bus.emit("graph_snapshot", self.snapshot())
@@ -162,7 +179,8 @@ class GameEngine:
                 payload["nodes"].append(
                     {"id": h.id, "compromised": h.compromised, "isolated": h.isolated,
                      "honeypot": h.honeypot, "discovered": h.discovered,
-                     "investigated": h.investigated, "beacon": h.beacon})
+                     "investigated": h.investigated, "beacon": h.beacon,
+                     "vulns": self._vuln_rows(h.id)})
         payload["links"] = [{"source": e.src, "target": e.dst, "blocked": e.blocked}
                             for e in self.edges if e.blocked]
         if payload["nodes"] or payload["links"] or new_nodes or new_links:
@@ -188,11 +206,15 @@ class GameEngine:
 
     # ------------------------------------------------------------- control
     async def start(self):
-        if self.state in ("idle", "game_over") or self._task is None or self._task.done():
-            self.state = "running"
+        if self.winner:
+            # match is finished — RESET starts a new one; re-announce so the banner reappears
+            await self.bus.emit("game_over", {"winner": self.winner, "reason": self.win_reason,
+                                              "rounds": self.round,
+                                              "score": self.compute_metrics()})
+            return
+        self.state = "running"
+        if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
-        else:
-            self.state = "running"
 
     async def stop(self):
         self.state = "idle"
@@ -213,9 +235,24 @@ class GameEngine:
             self.state = "running"
 
     def step(self):
+        """Play exactly one side's turn, then pause (works while paused or running)."""
+        if self.winner:
+            return
+        self._step = True
         if self.state == "paused":
-            self._step = True
             self.state = "running"
+
+    async def emit_state(self):
+        await self.bus.emit("control", {"state": self.state, "speed": self.speed,
+                                        "persona": self.red_persona})
+
+    async def submit(self, cmd: str, kw: dict):
+        """Graph-mutating judge commands: queued while the loop runs (single writer),
+        applied immediately when no loop is running so the button always lands."""
+        if self._task and not self._task.done():
+            await self.command_queue.put((cmd, kw))
+        else:
+            await self.run_command(cmd, kw)
 
     def set_speed(self, x: float):
         self.speed = max(0.25, min(8.0, x))
@@ -228,21 +265,21 @@ class GameEngine:
                 if self.state == "paused":
                     await asyncio.sleep(0.1)
                     continue
-                if self.state != "running":
+                if self.state != "running" or self.winner:
                     break
-                if self.round > self.s.MAX_TURNS:
-                    await self._game_over("blue", f"{self.s.MAX_TURNS} rounds survived — BLUE held the line")
-                    break
-                await self._play_side("red")
+                side = self._next_side
+                await self._play_side(side)
                 if self.winner:
                     break
-                await self._between_turns()
-                if self.state != "running":
-                    continue
-                await self._play_side("blue")
-                if self.winner:
-                    break
-                self.round += 1
+                if side == "red":
+                    self._next_side = "blue"
+                else:
+                    self._next_side = "red"
+                    if self.round >= self.s.MAX_TURNS:
+                        await self._game_over(
+                            "blue", f"{self.s.MAX_TURNS} rounds survived — BLUE held the line")
+                        break
+                    self.round += 1
                 await self._between_turns()
         except asyncio.CancelledError:
             raise
@@ -256,6 +293,7 @@ class GameEngine:
         if self._step:
             self._step = False
             self.state = "paused"
+            await self.emit_state()
             return
         delay = self.turn_delay / self.speed
         end = delay
@@ -269,31 +307,35 @@ class GameEngine:
     async def _drain_commands(self):
         while not self.command_queue.empty():
             cmd, kw = self.command_queue.get_nowait()
-            try:
-                if cmd == "zero_day":
-                    await self._inject_zero_day()
-                elif cmd == "insider":
-                    await self._insider_threat()
-                elif cmd == "model_swap":
-                    agent = self.agents.get(kw["side"])
-                    if agent:
-                        agent.model = kw["model"]
-                        await self.bus.emit("intervention",
-                                            {"kind": "model_swap",
-                                             "narration": f"{kw['side'].upper()} now runs on {kw['model']}"})
-                elif cmd == "persona":
-                    from .agents import PERSONAS
-                    p = kw["persona"]
-                    self.red_persona = p
-                    agent = self.agents.get("red")
-                    if agent:
-                        agent.set_persona(p)
+            await self.run_command(cmd, kw)
+
+    async def run_command(self, cmd: str, kw: dict):
+        try:
+            if cmd == "zero_day":
+                await self._inject_zero_day()
+            elif cmd == "insider":
+                await self._insider_threat()
+            elif cmd == "model_swap":
+                agent = self.agents.get(kw["side"])
+                if agent:
+                    agent.model = kw["model"]
                     await self.bus.emit("intervention",
-                                        {"kind": "persona",
-                                         "narration": f"RED persona → "
-                                                      f"{PERSONAS.get(p, {}).get('label', p)}"})
-            except Exception:  # noqa: BLE001
-                log.exception("command %s failed", cmd)
+                                        {"kind": "model_swap", "side": kw["side"], "model": kw["model"],
+                                         "narration": f"{kw['side'].upper()} now runs on {kw['model']}"})
+            elif cmd == "persona":
+                from .agents import PERSONAS
+                p = kw["persona"]
+                self.red_persona = p
+                agent = self.agents.get("red")
+                if agent:
+                    agent.set_persona(p)
+                note = "" if agent else " (heuristic mode — personas only steer LLM agents)"
+                await self.bus.emit("intervention",
+                                    {"kind": "persona", "persona": p,
+                                     "narration": f"RED persona → "
+                                                  f"{PERSONAS.get(p, {}).get('label', p)}{note}"})
+        except Exception:  # noqa: BLE001
+            log.exception("command %s failed", cmd)
 
     # ---------------------------------------------------------- turn flow
     async def _play_side(self, side: str):
@@ -333,8 +375,8 @@ class GameEngine:
             if self.winner:
                 return
         if side == "blue":
-            self._maybe_false_positive()
-            self._check_eviction()
+            await self._maybe_false_positive()
+            await self._check_eviction()
 
     async def _log_turn(self, rec: TurnRecord):
         self.turns.append(rec)
@@ -435,7 +477,7 @@ class GameEngine:
                 description=f"PATCH {v.cve_label} on {v.host} (sev {v.severity}, {v.name}){intel.tag(v)}"))
         # ISOLATE: alerted or confirmed-compromised hosts
         flagged = {a.host for a in self.alerts}
-        flagged |= {h.id for h in self.hosts.values() if h.investigated and h.compromised}
+        flagged |= {h.id for h in self.hosts.values() if h.verdict}
         for hid in sorted(flagged):
             h = self.hosts[hid]
             if h.isolated or h.kind in ("internet", "firewall") or h.honeypot:
@@ -470,7 +512,7 @@ class GameEngine:
         inv += [h.id for h in sorted(self.hosts.values(), key=lambda h: -h.criticality)]
         for hid in dict.fromkeys(inv):
             h = self.hosts.get(hid)
-            if h and not h.investigated and h.kind != "internet" and not h.honeypot:
+            if h and not self._recently_investigated(h) and h.kind != "internet" and not h.honeypot:
                 acts.append(ActionSpec(
                     action="INVESTIGATE", args={"host": hid},
                     description=f"INVESTIGATE {hid} ({h.kind}/{h.zone}, crit {h.criticality}) — "
@@ -479,17 +521,26 @@ class GameEngine:
                 break
         # THREAT_HUNT: sweep a whole zone — reveals true status + burns C2 beacons
         for zone in ("dmz", "corp", "servers", "restricted"):
-            hosts_in_zone = [h for h in self.hosts.values()
-                             if h.zone == zone and not h.investigated and h.kind != "internet"]
+            hosts_in_zone = self._huntable(zone)
             if hosts_in_zone:
                 acts.append(ActionSpec(
                     action="THREAT_HUNT", args={"zone": zone},
                     description=f"THREAT_HUNT in {zone} zone — sweep {len(hosts_in_zone)} "
-                                f"un-investigated host(s): reveals true compromise status "
+                                f"not-recently-investigated host(s): reveals current compromise status "
                                 f"and removes hidden C2 beacons"))
         for i, a in enumerate(acts):
             a.index = i
         return acts
+
+    def _recently_investigated(self, h: Host) -> bool:
+        """A verdict is fresh for STALE_INVESTIGATION rounds unless a newer alert hits the host."""
+        if not h.investigated or self.round - h.investigated_round >= STALE_INVESTIGATION:
+            return False
+        return not any(a.host == h.id and a.turn > h.investigated_round for a in self.alerts)
+
+    def _huntable(self, zone: str) -> list[Host]:
+        return [h for h in self.hosts.values() if h.zone == zone and h.kind != "internet"
+                and not h.honeypot and not self._recently_investigated(h)]
 
     def _isolate_cost(self, h: Host) -> int:
         return h.criticality * (2 if h.zone in ("servers", "restricted") else 1)
@@ -540,8 +591,9 @@ class GameEngine:
                      "vulns": [{"id": v.id, "cve": v.cve_label, "sev": v.severity,
                                 "patched": v.patched, "epss": v.epss, "kev": v.kev}
                                for v in self._host_vulns(h.id)]}
-            if h.investigated:
-                entry["confirmed_compromised"] = h.compromised
+            if h.investigated:  # verdict as of the last investigation — NOT live truth
+                entry["last_investigated_round"] = h.investigated_round
+                entry["confirmed_compromised"] = h.verdict
             hosts.append(entry)
         alerts = [{"round": a.turn, "host": a.host, "kind": a.kind,
                    "confidence": round(a.confidence, 2)}
@@ -596,7 +648,11 @@ class GameEngine:
             hid = spec.args["host"]
             rec.success = self.rng.random() < v.exploitability
             noise = v.noise
-            if rec.success:
+            if target and target.honeypot:
+                rec.success = False
+                rec.narration = (f"RED fires {v.cve_label} at {hid} — it's a HONEYPOT. The session "
+                                 f"is a sandbox; BLUE's tripwire fires")
+            elif rec.success:
                 changed |= self._compromise(hid)
                 rec.narration = (f"RED exploits {v.cve_label} ({v.name}) on {hid} — shell obtained, "
                                  f"neighbors now visible")
@@ -702,9 +758,10 @@ class GameEngine:
             h = self.hosts[spec.args["host"]]
             was_compromised = h.compromised
             cost = self._isolate_cost(h)
-            if h.beacon and not h.investigated:
+            if h.beacon:
                 # hidden C2 beacon re-establishes the foothold: isolation breaks, attacker stays
                 h.beacon = False
+                h.verdict = True  # BLUE now knows the attacker is there
                 self.impact += cost
                 changed.add(h.id)
                 self.mirror.write(queries.SET_HOST, id=h.id, props={"beacon": False})
@@ -748,26 +805,37 @@ class GameEngine:
             self.vulns[vid] = Vuln(id=vid, host=hid, cve_label="CVE-2021-44228",
                                    name="Log4Shell RCE (decoy)", severity=10,
                                    exploitability=0.9, noise=0.05)
-            e = {"src": near, "dst": hid, "port": 443, "protocol": "tcp", "blocked": False}
             from .models import Edge
-            edge = Edge(**e)
-            self.edges.append(edge)
-            self.adj.setdefault(near, []).append(edge)
-            self.mirror.write(queries.ADD_HONEYPOT, near=near, id=hid, props=hp.model_dump())
+            # sibling of `near`: reachable from near AND from every host that reaches near,
+            # so a honeypot by the crown jewel is touchable *before* RED owns the jewel
+            sources = list(dict.fromkeys(
+                [near] + [e.src for e in self.edges if e.dst == near and not e.blocked
+                          and not self.hosts[e.src].honeypot]))
+            new_links = []
+            for src in sources:
+                edge = Edge(src=src, dst=hid, port=443, protocol="tcp")
+                self.edges.append(edge)
+                self.adj.setdefault(src, []).append(edge)
+                new_links.append({"source": src, "target": hid, "port": 443,
+                                  "protocol": "tcp", "blocked": False})
+            hp.discovered = any(self.hosts[s].compromised for s in sources)
+            self.mirror.write(queries.ADD_HONEYPOT, sources=sources, id=hid, props=hp.model_dump())
             rec.narration = f"BLUE deploys honeypot {hid} near {near} — tripwire armed"
             await self.bus.emit("graph_patch", {
                 "nodes": [], "links": [],
                 "new_nodes": [{"id": hid, "name": hid, "kind": "webserver", "zone": zone,
                                "os": hp.os, "criticality": 3, "compromised": False,
-                               "isolated": False, "honeypot": True, "discovered": False,
-                               "crown": False}],
-                "new_links": [{"source": near, "target": hid, "port": 443,
-                               "protocol": "tcp", "blocked": False}]})
+                               "isolated": False, "honeypot": True, "discovered": hp.discovered,
+                               "investigated": False, "beacon": False,
+                               "crown": False, "vulns": self._vuln_rows(hid)}],
+                "new_links": new_links})
             return rec
 
         elif spec.action == "INVESTIGATE":
             h = self.hosts[spec.args["host"]]
             h.investigated = True
+            h.investigated_round = self.round
+            h.verdict = h.compromised
             changed.add(h.id)
             props = {"investigated": True}
             verdict = "COMPROMISED — attacker present!" if h.compromised else "clean"
@@ -780,11 +848,12 @@ class GameEngine:
 
         elif spec.action == "THREAT_HUNT":
             zone = spec.args["zone"]
-            swept = [h for h in self.hosts.values()
-                     if h.zone == zone and not h.investigated and h.kind != "internet"]
+            swept = self._huntable(zone)
             found, burned = [], 0
             for h in swept:
                 h.investigated = True
+                h.investigated_round = self.round
+                h.verdict = h.compromised
                 changed.add(h.id)
                 props = {"investigated": True}
                 if h.compromised:
@@ -818,31 +887,29 @@ class GameEngine:
             conf = min(0.95, noise + self.rng.random() * 0.35)
             await self._raise_alert(host, kind, conf)
 
-    def _maybe_false_positive(self):
+    async def _maybe_false_positive(self):
         if self.rng.random() < FALSE_POSITIVE_RATE:
             clean = [h for h in self.hosts.values()
                      if not h.compromised and h.kind != "internet"]
             if clean:
                 h = self.rng.choice(clean)
                 conf = 0.25 + self.rng.random() * 0.3
-                a = Alert(turn=self.round, host=h.id, kind="false_positive",
-                          confidence=round(conf, 2), true_positive=False)
-                self.alerts.append(a)
-                self.all_alerts.append(a)
-                # fire-and-forget emit; called from sync context in _play_side loop
-                asyncio.get_running_loop().create_task(
-                    self.bus.emit("alert", {"host": h.id, "kind": "anomaly",
-                                            "confidence": round(conf, 2)}))
+                # kind mimics a real detection: BLUE must not be able to tell FPs apart
+                await self._raise_alert(h.id, self.rng.choice(FP_KINDS), conf, true_positive=False)
 
     # -------------------------------------------------------- interventions
     async def _inject_zero_day(self):
         cands = [h for h in self.hosts.values()
                  if h.zone in ("corp", "servers") and not h.honeypot
+                 and not h.isolated and not h.compromised
                  and not any(v.zero_day for v in self._host_vulns(h.id))]
         if not cands:
+            await self.bus.emit("intervention", {
+                "kind": "zero_day", "narration": "⚠ JUDGE: no eligible host left for a zero-day"})
             return
         h = self.rng.choice(cands)
-        vid = f"V-0DAY-{self.action_n}"
+        self._zd_count += 1
+        vid = f"V-0DAY-{self._zd_count:02d}"
         v = Vuln(id=vid, host=h.id, cve_label="CVE-2026-1337",
                  name="ZERO-DAY: SakuraRPC pre-auth RCE", severity=10,
                  exploitability=0.9, noise=0.08, zero_day=True)
@@ -856,6 +923,7 @@ class GameEngine:
             "kind": "zero_day",
             "narration": f"⚠ JUDGE INTERVENTION: zero-day CVE-2026-1337 dropped on {h.id} "
                          f"(exploit 0.9, near-silent)"})
+        await self._emit_patch({h.id})
         await self._emit_metrics()
 
     async def _insider_threat(self):
@@ -864,6 +932,8 @@ class GameEngine:
         if not priv:  # fall back: refresh + steal any rotated/regular cred so the button always lands
             others = [c for c in self.creds.values() if not c.stolen]
             if not others:
+                await self.bus.emit("intervention", {
+                    "kind": "insider", "narration": "⚠ JUDGE: RED already holds every credential"})
                 return
             c = self.rng.choice(others)
             c.rotated = False
@@ -878,10 +948,9 @@ class GameEngine:
         await self._emit_metrics()
 
     # ------------------------------------------------------------ game over
-    def _check_eviction(self):
+    async def _check_eviction(self):
         if self.ever_compromised and not self._controlled(include_internet=False):
-            asyncio.get_running_loop().create_task(
-                self._game_over("blue", "RED fully evicted — zero hosts under attacker control"))
+            await self._game_over("blue", "RED fully evicted — zero hosts under attacker control")
 
     async def _game_over(self, winner: str, reason: str):
         if self.winner:
@@ -892,8 +961,9 @@ class GameEngine:
         await self.bus.emit("game_over", {"winner": winner, "reason": reason,
                                           "rounds": self.round,
                                           "score": self.compute_metrics()})
+        await self.emit_state()
         if self.reports_enabled:
-            asyncio.get_running_loop().create_task(self._emit_report())
+            self._report_task = asyncio.get_running_loop().create_task(self._emit_report())
         else:
             self.bus.stop_recording()
 
@@ -905,5 +975,6 @@ class GameEngine:
         except Exception:  # noqa: BLE001
             log.exception("report failed")
             md = ""
+        self.last_report = md
         await self.bus.emit("report", {"markdown": md})
         self.bus.stop_recording()

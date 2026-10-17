@@ -99,10 +99,12 @@ SET e.blocked = $blocked
 """
 
 ADD_HONEYPOT = """
-MATCH (near:Host {id: $near})
 MERGE (h:Host {id: $id})
 SET h += $props
-MERGE (near)-[:CONNECTS_TO {port: 443, protocol: 'tcp', blocked: false}]->(h)
+WITH h
+UNWIND $sources AS src
+MATCH (s:Host {id: src})
+MERGE (s)-[:CONNECTS_TO {port: 443, protocol: 'tcp', blocked: false}]->(h)
 """
 
 LOG_TURN = """

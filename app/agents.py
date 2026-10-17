@@ -63,7 +63,8 @@ Rules:
 - PATCH kills a vuln forever, but change windows are limited: MAX ONE PATCH PER TURN (a second patch in the same turn fails). Spend your other action point on INVESTIGATE, ISOLATE, ROTATE_CREDS or DEPLOY_HONEYPOT.
 - ROTATE_CREDS invalidates stolen credentials — rotate privileged users when alerts point near their assets.
 - DEPLOY_HONEYPOT near the CrownJewel or DC gives a guaranteed high-confidence alert when touched.
-- THREAT_HUNT sweeps an entire zone at once: reveals true compromise status of every un-investigated host there and burns hidden C2 beacons (attacker persistence that makes ISOLATE fail).
+- INVESTIGATE / THREAT_HUNT verdicts are snapshots: a host found clean can be compromised later. Verdicts go stale after a few rounds or when a new alert hits the host — then you may investigate again.
+- THREAT_HUNT sweeps an entire zone at once: reveals the current compromise status of every not-recently-investigated host there and burns hidden C2 beacons (attacker persistence that makes ISOLATE fail).
 - If an ISOLATE reports a hidden C2 beacon re-established the foothold, INVESTIGATE that host to burn the beacon before isolating again.
 - Think like the attacker: defend the shortest unpatched path to the CrownJewel first.
 
@@ -122,22 +123,30 @@ class Agent:
             "instruction": (f"Pick {'ONE action_index' if n_actions == 1 else 'TWO distinct action_indices'} "
                             f"from legal_actions. JSON only."),
         }, ensure_ascii=False)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 30  # hard per-side budget, then heuristic fallback
         for attempt in range(2):
+            remaining = deadline - loop.time()
+            if remaining < 3:
+                break
             try:
-                return await asyncio.wait_for(self._call(user_msg, legal, n_actions), timeout=25)
+                return await asyncio.wait_for(self._call(user_msg, legal, n_actions),
+                                              timeout=remaining)
             except Exception as e:  # noqa: BLE001
                 log.warning("%s agent attempt %d failed: %s", self.side, attempt + 1, e)
         chosen = heuristic_choose(engine, self.side, legal, n_actions)
         return chosen, "[fallback: LLM unavailable — heuristic policy]", True
 
     async def _call(self, user_msg: str, legal: list[ActionSpec], n_actions: int):
+        from openai import BadRequestError, UnprocessableEntityError
+
         try:
             resp = await self.client.chat.completions.create(
                 model=self.model, temperature=self.temperature, max_tokens=2000,
                 messages=[{"role": "system", "content": self.system},
                           {"role": "user", "content": user_msg}],
                 response_format={"type": "json_object"})
-        except Exception:
+        except (BadRequestError, UnprocessableEntityError):  # model rejects response_format
             resp = await self.client.chat.completions.create(
                 model=self.model, temperature=self.temperature, max_tokens=2000,
                 messages=[{"role": "system", "content": self.system},
@@ -230,7 +239,7 @@ def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
 
     # 1. confirmed compromised -> isolate (cheap hosts) or patch (critical hosts)
     for h in engine.hosts.values():
-        if h.investigated and h.compromised and not h.isolated:
+        if h.verdict and not h.isolated:
             if h.criticality < 9:
                 add(next((a for a in legal if a.action == "ISOLATE" and a.args["host"] == h.id), None))
             else:

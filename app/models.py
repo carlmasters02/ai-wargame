@@ -17,8 +17,10 @@ class Host(BaseModel):
     honeypot: bool = False
     discovered: bool = False
     investigated: bool = False
+    investigated_round: int = 0    # when BLUE last investigated (verdicts go stale)
+    verdict: bool | None = None    # compromised status AS OF that investigation (BLUE's knowledge)
     vulns_revealed: bool = False  # RED has scanned this host's vuln details
-    beacon: bool = False          # RED C2 persistence: survives ISOLATE unless investigated
+    beacon: bool = False          # RED C2 persistence: next ISOLATE fails unless investigated first
 
 
 class Edge(BaseModel):

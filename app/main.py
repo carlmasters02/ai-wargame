@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
             await websocket.send_json({"type": "metrics", "payload": engine.compute_metrics()})
             await websocket.send_json({"type": "status", "payload": {
                 "state": engine.state, "llm": settings.aiand_enabled,
+                "speed": engine.speed, "persona": engine.red_persona,
                 "models": {"red": engine.agents["red"].model if engine.agents["red"] else "heuristic",
                            "blue": engine.agents["blue"].model if engine.agents["blue"] else "heuristic"},
                 "available_models": available_models}})
@@ -71,6 +72,9 @@ def create_app() -> FastAPI:
                 await websocket.send_json({"type": "game_over", "payload": {
                     "winner": engine.winner, "reason": engine.win_reason,
                     "rounds": engine.round, "score": engine.compute_metrics()}})
+                if engine.last_report is not None:
+                    await websocket.send_json({"type": "report",
+                                               "payload": {"markdown": engine.last_report}})
             while True:
                 await websocket.receive_text()  # keepalive; client sends nothing meaningful
         except WebSocketDisconnect:
@@ -82,25 +86,31 @@ def create_app() -> FastAPI:
     @app.post("/api/start")
     async def start():
         await engine.start()
+        await engine.emit_state()
         return {"state": engine.state}
 
     @app.post("/api/pause")
     async def pause():
         engine.pause()
+        await engine.emit_state()
         return {"state": engine.state}
 
     @app.post("/api/resume")
     async def resume():
         engine.resume()
+        await engine.emit_state()
         return {"state": engine.state}
 
     @app.post("/api/step")
     async def step():
-        if engine.state in ("idle", "game_over"):
+        if engine.winner:
+            return {"state": engine.state}
+        if engine.state == "idle":
             await engine.start()
             engine.pause()
         engine.step()
-        return {"state": "step"}
+        await engine.emit_state()
+        return {"state": engine.state}
 
     @app.post("/api/speed")
     async def speed(body: dict):
@@ -116,12 +126,12 @@ def create_app() -> FastAPI:
     # ---- judge interventions ----
     @app.post("/api/intervene/zero_day")
     async def zero_day():
-        await engine.command_queue.put(("zero_day", {}))
+        await engine.submit("zero_day", {})
         return {"queued": True}
 
     @app.post("/api/intervene/insider")
     async def insider():
-        await engine.command_queue.put(("insider", {}))
+        await engine.submit("insider", {})
         return {"queued": True}
 
     @app.post("/api/model")
@@ -131,7 +141,7 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "side + model required"}, status_code=400)
         if engine.agents[side] is None:
             return JSONResponse({"error": "LLM not configured (heuristic mode)"}, status_code=409)
-        await engine.command_queue.put(("model_swap", {"side": side, "model": model}))
+        await engine.run_command("model_swap", {"side": side, "model": model})  # no graph mutation
         return {"queued": True}
 
     @app.post("/api/persona")
@@ -141,7 +151,7 @@ def create_app() -> FastAPI:
         if p not in PERSONAS:
             return JSONResponse({"error": f"persona must be one of {sorted(PERSONAS)}"},
                                 status_code=400)
-        await engine.command_queue.put(("persona", {"persona": p}))
+        await engine.run_command("persona", {"persona": p})  # no graph mutation
         return {"queued": True, "label": PERSONAS[p]["label"]}
 
     @app.get("/api/models")

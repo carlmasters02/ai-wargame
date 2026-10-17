@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -5,7 +6,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     NEO4J_URI: str = ""
-    NEO4J_USER: str = "neo4j"
+    # Aura's credentials file calls it NEO4J_USERNAME; accept both spellings
+    NEO4J_USER: str = Field("neo4j", validation_alias=AliasChoices("NEO4J_USER", "NEO4J_USERNAME"))
     NEO4J_PASSWORD: str = ""
 
     AIAND_API_KEY: str = ""

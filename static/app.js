@@ -14,6 +14,7 @@ const state = {
   cj: null,
   lateralEdges: new Map(), // "src>dst" -> expiry timestamp
   maxRounds: 20,
+  seed: null,         // seed of the loaded match
 };
 
 let Graph = null;
@@ -26,10 +27,12 @@ let gameOverInfo = null;        // winner payload
 let ws = null;
 let backoff = 1000;
 let paused = false;
+let everConnected = false;
+let reconnecting = false;       // true until the first snapshot after a WS reconnect
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
-  ws.onopen = () => { backoff = 1000; };
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => { backoff = 1000; reconnecting = everConnected; everConnected = true; };
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     handle(msg.type, msg.payload || {});
@@ -198,13 +201,19 @@ function applyView() {
 
 // ---------------------------------------------------------------- snapshot / patch
 function loadSnapshot(p) {
+  // a WS blip re-sends the snapshot of the SAME match: refresh the graph, keep feeds/history
+  const seen = matchLog.filter((e) => e.kind === "action" && e.action !== "PASS").length;
+  const keep = reconnecting && p.seed === state.seed && (p.actions || 0) >= seen;
+  reconnecting = false;
   state.nodes.clear();
   state.links = [];
   for (const n of p.nodes) state.nodes.set(n.id, { ...n });
   for (const l of p.links) state.links.push({ ...l });
   state.cj = p.crown_jewel;
+  state.seed = p.seed;
   state.maxRounds = p.max_rounds || 20;
   document.getElementById("seed").value = p.seed;
+  if (keep) { applyView(); return; }
   document.getElementById("banner").classList.add("hidden");
   document.getElementById("report-modal").classList.add("hidden");
   document.getElementById("timeline-modal").classList.add("hidden");
@@ -248,8 +257,9 @@ function addThought(p) {
   const card = document.createElement("div");
   card.className = `card ${p.side}`;
   card.innerHTML = `<div class="thought">💭 ${escapeHtml(p.text)}
-    ${p.fallback ? '<span class="fallback-badge">FALLBACK</span>' : ""}</div>
-    <div class="action">…</div>`;
+    ${p.fallback ? '<span class="fallback-badge">FALLBACK</span>' : ""}
+    ${p.model ? `<span class="model-tag">${escapeHtml(p.model)}</span>` : ""}</div>
+    <div class="action pending">…</div>`;
   feed.prepend(card);
   trim(feed);
   pendingCard[p.side] = card;
@@ -270,8 +280,10 @@ function addResult(p) {
     `<span class="tech-chip ${p.side}" title="${escapeHtml(t.name)}">${escapeHtml(t.id)}</span>`).join("");
   const html = `<div class="action">${p.action} <span style="color:#7d8ba1">${escapeHtml(args)}</span> ${chips}</div>
     <div class="result ${p.success ? "ok" : "fail"}">${p.success ? "✔" : "✘"} ${escapeHtml(p.narration)}</div>`;
-  if (card) {
-    card.querySelector(".action").outerHTML = html;
+  if (card) {  // BLUE has 2 actions per turn: append each in order
+    const pending = card.querySelector(".pending");
+    if (pending) pending.remove();
+    card.insertAdjacentHTML("beforeend", html);
   } else {
     const feed = document.getElementById(p.side === "red" ? "red-feed" : "blue-feed");
     const c = document.createElement("div");
@@ -291,8 +303,8 @@ function addResult(p) {
   }
 }
 
-function addSystemCard(narration) {
-  matchLog.push({ round: state.currentRound || null, side: "sys", kind: "intervention", text: narration });
+function addSystemCard(narration, kind = "intervention") {
+  matchLog.push({ round: state.currentRound || null, side: "sys", kind, text: narration });
   for (const fid of ["red-feed", "blue-feed"]) {
     const feed = document.getElementById(fid);
     const c = document.createElement("div");
@@ -377,13 +389,14 @@ function resetCampaign() {
 }
 
 function campaignAdvance(winner) {
-  if (!campaign.total) return;
+  if (!campaign.total || campaign.played >= campaign.total) return;  // series already decided
+  if (campaign.played === 0 && state.seed != null) campaign.baseSeed = state.seed;
   if (winner === "red" || winner === "blue") campaign.score[winner] += 1;
   campaign.played += 1;
   campaignLabel();
   if (campaign.played < campaign.total) {
     addSystemCard(`🏆 campaign: game ${campaign.played + 1}/${campaign.total} starts shortly ` +
-      `(seed ${campaign.baseSeed + campaign.played})`);
+      `(seed ${campaign.baseSeed + campaign.played})`, "system");
     campaign.timer = setTimeout(() => {
       const seed = campaign.baseSeed + campaign.played;
       document.getElementById("seed").value = seed;
@@ -392,11 +405,12 @@ function campaignAdvance(winner) {
   } else {
     const s = campaign.score;
     const champ = s.red === s.blue ? "DRAW" : (s.red > s.blue ? "🔴 RED" : "🔵 BLUE");
-    addSystemCard(`🏆 campaign over: ${champ} takes the series ${s.red}–${s.blue}`);
+    addSystemCard(`🏆 campaign over: ${champ} takes the series ${s.red}–${s.blue}`, "system");
   }
 }
 
 function showGameOver(p) {
+  if (gameOverInfo) return;  // already handled for this match (WS reconnect re-sends it)
   gameOverInfo = p;
   matchLog.push({ round: p.rounds, side: "sys", kind: "end",
     text: `GAME OVER — ${p.winner.toUpperCase()} wins: ${p.reason}` });
@@ -422,8 +436,9 @@ function openReport() {
 }
 
 function showReport(p) {
+  const first = lastReport === null;
   lastReport = p.markdown || "";
-  setTimeout(openReport, 2200);
+  if (first) setTimeout(openReport, 2200);
 }
 
 function openTimeline() {
@@ -433,12 +448,12 @@ function openTimeline() {
   const redActs = matchLog.filter((e) => e.side === "red" && e.kind === "action");
   const bluActs = matchLog.filter((e) => e.side === "blue" && e.kind === "action");
   const alerts = matchLog.filter((e) => e.kind === "alert");
-  const sys = matchLog.filter((e) => e.side === "sys");
+  const judge = matchLog.filter((e) => e.kind === "intervention");
   const go = gameOverInfo;
   summary.innerHTML = go
     ? `<b style="color:${go.winner === "red" ? "#ff2d55" : "#3b9dff"}">${go.winner.toUpperCase()} WINS</b> — ${escapeHtml(go.reason)} ·
        ${go.rounds} rounds · ${redActs.length} RED actions · ${bluActs.length} BLUE actions ·
-       ${alerts.length} alerts · ${sys.length - 1} judge intervention(s)`
+       ${alerts.length} alerts · ${judge.length} judge intervention(s)`
     : `${matchLog.length} events so far`;
   body.innerHTML = matchLog.map((e) => {
     const icon = { action: e.success ? "✔" : "✘", alert: "⚠", intervention: "⚖", end: "🏁" }[e.kind] || "•";
@@ -491,15 +506,21 @@ function renderAttackBar() {
 async function downloadExport(url, filename) {
   try {
     const r = await fetch(url);
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) {
+      let msg = `HTTP ${r.status} (replay/offline mode?)`;
+      try { msg = (await r.json()).error || msg; } catch (_) { /* non-JSON */ }
+      throw new Error(msg);
+    }
     const blob = await r.blob();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
+    document.body.appendChild(a);  // Firefox needs the anchor in the DOM
     a.click();
-    URL.revokeObjectURL(a.href);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   } catch (e) {
-    addSystemCard(`⚠ export unavailable (replay/offline mode): ${url}`);
+    addSystemCard(`⚠ export unavailable: ${e.message}`, "system");
   }
 }
 
@@ -512,31 +533,61 @@ function handle(type, p) {
     case "action_result": addResult(p); break;
     case "alert": addAlert(p); break;
     case "metrics": updateMetrics(p); break;
-    case "intervention": addSystemCard(p.narration); break;
+    case "intervention": onIntervention(p); break;
     case "game_over": showGameOver(p); break;
     case "report": showReport(p); break;
     case "status": applyStatus(p); break;
+    case "control": applyControl(p); break;
+    case "turn_start": pendingCard[p.side] = null; break;
+    case "error": addSystemCard(`⚠ ${p.message || "server error"}`, "system"); break;
   }
+}
+
+function onIntervention(p) {
+  addSystemCard(p.narration);
+  if (p.kind === "model_swap" && p.side) {
+    document.getElementById(`${p.side}-model`).textContent = p.model;
+    const sel = document.getElementById(`model-${p.side}`);
+    if ([...sel.options].some((o) => o.value === p.model)) sel.value = p.model;
+  }
+  if (p.kind === "persona" && p.persona) document.getElementById("persona-red").value = p.persona;
+}
+
+function applyControl(p) {
+  if (p.state) {
+    paused = p.state === "paused";
+    document.getElementById("btn-pause").textContent = paused ? "▶ RESUME" : "⏸ PAUSE";
+  }
+  if (p.speed != null) {
+    document.getElementById("speed").value = p.speed;
+    document.getElementById("speed-x").textContent = p.speed + "×";
+  }
+  if (p.persona) document.getElementById("persona-red").value = p.persona;
 }
 
 function applyStatus(p) {
   document.getElementById("red-model").textContent = p.models.red;
   document.getElementById("blue-model").textContent = p.models.blue;
   fillModelSelects(p.available_models || [], p.models);
+  applyControl(p);
+  const persona = document.getElementById("persona-red");
+  persona.disabled = !p.llm;
+  persona.title = p.llm ? "RED persona (LLM games)" : "Personas need an LLM (AIAND_API_KEY) — heuristic mode";
 }
 
 function fillModelSelects(models, current) {
   for (const [id, cur] of [["model-red", current.red], ["model-blue", current.blue]]) {
     const sel = document.getElementById(id);
     sel.innerHTML = "";
-    const all = models.length ? models : [cur];
+    const all = models.length ? [...models] : [cur];
+    if (cur && !all.includes(cur)) all.unshift(cur);  // never show a model that isn't running
     for (const m of all) {
       const opt = document.createElement("option");
       opt.value = m; opt.textContent = m;
       if (m === cur) opt.selected = true;
       sel.appendChild(opt);
     }
-    if (!models.length) sel.disabled = true;
+    sel.disabled = !models.length;
   }
 }
 
@@ -558,7 +609,7 @@ function initControls() {
   };
   document.getElementById("btn-step").onclick = () => post("/api/step");
   document.getElementById("btn-reset").onclick = () => {
-    if (campaign.timer) { clearTimeout(campaign.timer); campaign.timer = null; }
+    resetCampaign();  // manual reset aborts the running series
     post("/api/reset", { seed: parseInt(document.getElementById("seed").value || "42") });
   };
   document.getElementById("btn-zeroday").onclick = () => post("/api/intervene/zero_day");

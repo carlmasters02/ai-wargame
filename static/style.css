@@ -144,12 +144,14 @@ body {
 
 #report-modal { position: fixed; inset: 0; background: rgba(5,8,14,.85); z-index: 60; display: flex; align-items: center; justify-content: center; }
 #board-modal { position: fixed; inset: 0; background: rgba(5,8,14,.85); z-index: 60; display: flex; align-items: center; justify-content: center; }
-#report-card {
+#report-card, #board-card {
   width: min(760px, 92vw); max-height: 84vh; overflow-y: auto;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 26px 30px;
   position: relative;
 }
-#report-card h2 { margin-bottom: 12px; }
+#report-card h2, #board-card h2 { margin-bottom: 12px; }
+.card .model-tag { color: var(--dim); font-size: 10px; border: 1px solid var(--border);
+  border-radius: 4px; padding: 0 4px; margin-left: 4px; }
 #report-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--dim); font-size: 20px; cursor: pointer; }
 #board-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--dim); font-size: 20px; cursor: pointer; }
 #report-body { font-size: 14px; line-height: 1.55; }
