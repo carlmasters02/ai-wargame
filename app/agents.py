@@ -23,11 +23,36 @@ Rules:
 - You receive your network view (JSON), stolen credentials, and a numbered list of legal actions. Pick exactly ONE by index.
 - You only see discovered hosts. New neighbors become visible when you compromise a host, but their vulns stay hidden until you SCAN from an owned neighbor.
 - Every action may raise a defender alert with probability = its noise. SCAN and LATERAL_MOVE are quiet; EXPLOIT noise depends on the vuln. Quiet is survival: if the defender isolates your host, you lose it.
-- Prefer LATERAL_MOVE with stolen credentials over EXPLOIT. HARVEST_CREDS on owned hosts unlocks lateral paths. Servers and the domain controller hold the best creds.
+- Prefer LATERAL_MOVE with stolen credentials over EXPLOIT. HARVEST_CREDS on owned hosts unlocks lateral paths. Servers and the domain controller hold the best creds. PHISH_USER can steal a user's creds from afar when you can't reach the host storing them.
+- C2_BEACON plants persistence on an owned host: the next ISOLATE on it fails unless the defender investigated first. Plant beacons on your most valuable footholds.
+- DEFENSE_EVASION wipes logs on an owned host: future actions involving it are much harder to detect. Use before loud moves (EXFILTRATE, HARVEST_CREDS).
+- Vuln tags show real-world intel: EPSS = exploit probability, CISA-KEV = actively exploited in the wild.
 - If the CrownJewel is owned, EXFILTRATE immediately.
 - Beware suspiciously easy, high-value-looking hosts: they may be honeypots.
 
 Respond with ONLY JSON: {"thought": "<=60 words", "action_index": N}"""
+
+PERSONAS = {
+    "apt": {"label": "Patient APT",
+            "addon": ""},
+    "ransomware": {"label": "Ransomware crew",
+                   "addon": "\nPersona: you are a ransomware crew — fast and loud. Prefer EXPLOIT "
+                            "over slow credential play, aim for high-criticality hosts, and "
+                            "EXFILTRATE the moment you can. Never SCAN when a decent EXPLOIT is "
+                            "available. Beacons and evasion are a waste of your time."},
+    "ghost": {"label": "Ghost (max stealth)",
+              "addon": "\nPersona: you are obsessively stealthy. Never take a noisy action "
+                       "(EXPLOIT, HARVEST_CREDS, EXFILTRATE) on or from a host without "
+                       "DEFENSE_EVASION first. Plant a C2_BEACON on every owned server. Prefer "
+                       "SCAN and credential paths over brute-force exploitation."},
+}
+
+
+def build_system(side: str, persona: str = "apt") -> str:
+    if side == "red":
+        p = PERSONAS.get(persona, PERSONAS["apt"])
+        return RED_SYSTEM + p["addon"]
+    return BLUE_SYSTEM
 
 BLUE_SYSTEM = """You are BLUE, SOC lead defending Sakura Logistics K.K. An APT is probing your network. Objective: keep the CrownJewel (SKR-DB-PROD) safe for all rounds, or fully evict the attacker.
 
@@ -38,6 +63,8 @@ Rules:
 - PATCH kills a vuln forever, but change windows are limited: MAX ONE PATCH PER TURN (a second patch in the same turn fails). Spend your other action point on INVESTIGATE, ISOLATE, ROTATE_CREDS or DEPLOY_HONEYPOT.
 - ROTATE_CREDS invalidates stolen credentials — rotate privileged users when alerts point near their assets.
 - DEPLOY_HONEYPOT near the CrownJewel or DC gives a guaranteed high-confidence alert when touched.
+- THREAT_HUNT sweeps an entire zone at once: reveals true compromise status of every un-investigated host there and burns hidden C2 beacons (attacker persistence that makes ISOLATE fail).
+- If an ISOLATE reports a hidden C2 beacon re-established the foothold, INVESTIGATE that host to burn the beacon before isolating again.
 - Think like the attacker: defend the shortest unpatched path to the CrownJewel first.
 
 Respond with ONLY JSON: {"thought": "<=60 words", "action_indices": [N, M]}"""
@@ -71,16 +98,21 @@ def extract_json(text: str) -> dict:
 
 
 class Agent:
-    def __init__(self, side: str, model: str, settings):
+    def __init__(self, side: str, model: str, settings, persona: str = "apt"):
         from openai import AsyncOpenAI
 
         self.side = side
         self.model = model
+        self.persona = persona
         self.client = AsyncOpenAI(base_url=settings.AIAND_BASE_URL,
                                   api_key=settings.AIAND_API_KEY,
                                   timeout=20.0, max_retries=0)
-        self.system = RED_SYSTEM if side == "red" else BLUE_SYSTEM
+        self.system = build_system(side, persona)
         self.temperature = 0.6 if side == "red" else 0.3
+
+    def set_persona(self, persona: str):
+        self.persona = persona
+        self.system = build_system(self.side, persona)
 
     async def choose(self, engine, obs: dict, legal: list[ActionSpec], n_actions: int):
         """Returns (chosen ActionSpecs, thought, used_fallback)."""
@@ -166,6 +198,10 @@ def _heuristic_red(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
             v = engine.vulns[a.args["vuln"]]
             return (_zone(engine, a.args["host"]), v.exploitability, -v.noise)
         return [max(exp, key=k)]
+    # phish privileged users when no exploit is on the table
+    phish = [a for a in legal if a.action == "PHISH_USER" and "PRIVILEGED" in a.description]
+    if phish and engine.rng.random() < 0.6:
+        return [phish[0]]
     scans = [a for a in legal if a.action == "SCAN"]
     if scans:
         def sk(a):
@@ -173,6 +209,13 @@ def _heuristic_red(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
                      if not engine.hosts[n].vulns_revealed]
             return max(zones or [0])
         return [max(scans, key=sk)]
+    # quiet turns: dig in — beacon the most valuable foothold, else wipe logs
+    beac = [a for a in legal if a.action == "C2_BEACON"]
+    if beac:
+        return [max(beac, key=lambda a: engine.hosts[a.args["host"]].criticality)]
+    ev = [a for a in legal if a.action == "DEFENSE_EVASION"]
+    if ev:
+        return [max(ev, key=lambda a: engine.hosts[a.args["host"]].criticality)]
     return [legal[0]]
 
 
@@ -214,6 +257,15 @@ def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
         internal = [a for a in legal if a.action == "PATCH"
                     and engine.hosts[a.args["host"]].zone in ("corp", "servers", "restricted")]
         add(internal[0] if internal else next((a for a in legal if a.action == "PATCH"), None))
+    # 7. reactive hunting: sweep the zone of the highest-confidence alert, sometimes
+    if len(picks) < 2 and engine.alerts and engine.rng.random() < 0.5:
+        alert_zones = {engine.hosts[a.host].zone for a in engine.alerts
+                       if a.host in engine.hosts}
+        hunts = [a for a in legal if a.action == "THREAT_HUNT"
+                 and a.args["zone"] in alert_zones]
+        if hunts:
+            depth = {"restricted": 4, "servers": 3, "corp": 2, "dmz": 1}
+            add(max(hunts, key=lambda a: depth.get(a.args["zone"], 0)))
     if len(picks) < 2 and legal:
         add(legal[0])
     return picks

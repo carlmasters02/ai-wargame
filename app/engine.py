@@ -21,7 +21,9 @@ log = logging.getLogger("engine")
 
 ZONE_RANK = {"internet": 0, "dmz": 1, "corp": 2, "servers": 3, "restricted": 4}
 
-NOISE = {"SCAN": 0.15, "HARVEST_CREDS": 0.4, "LATERAL_MOVE": 0.2, "EXFILTRATE": 0.8}
+NOISE = {"SCAN": 0.15, "HARVEST_CREDS": 0.4, "LATERAL_MOVE": 0.2, "EXFILTRATE": 0.8,
+         "PHISH_USER": 0.3, "C2_BEACON": 0.25, "DEFENSE_EVASION": 0.1}
+EVASION_FACTOR = 0.4  # DEFENSE_EVASION multiplies future detection noise on that host
 FALSE_POSITIVE_RATE = 0.15
 MAX_HONEYPOTS = 3
 ALERT_WINDOW = 8
@@ -64,6 +66,8 @@ class GameEngine:
         self.winner: str | None = None
         self.win_reason = ""
         self._patch_used_this_turn = False
+        self.evasion: set[str] = set()  # hosts where RED wiped logs (detection noise reduced)
+        self.red_persona = "apt"
         self.rng = random.Random(0)
 
     def load_spec(self, spec: GraphSpec):
@@ -132,6 +136,7 @@ class GameEngine:
                  "os": h.os, "criticality": h.criticality, "compromised": h.compromised,
                  "isolated": h.isolated, "honeypot": h.honeypot,
                  "discovered": h.discovered, "crown": h.id == self.cj,
+                 "beacon": h.beacon,
                  "vulns": [{"id": v.id, "cve": v.cve_label, "name": v.name, "sev": v.severity,
                             "patched": v.patched, "zero_day": v.zero_day,
                             "epss": v.epss, "kev": v.kev}
@@ -157,7 +162,7 @@ class GameEngine:
                 payload["nodes"].append(
                     {"id": h.id, "compromised": h.compromised, "isolated": h.isolated,
                      "honeypot": h.honeypot, "discovered": h.discovered,
-                     "investigated": h.investigated})
+                     "investigated": h.investigated, "beacon": h.beacon})
         payload["links"] = [{"source": e.src, "target": e.dst, "blocked": e.blocked}
                             for e in self.edges if e.blocked]
         if payload["nodes"] or payload["links"] or new_nodes or new_links:
@@ -276,6 +281,17 @@ class GameEngine:
                         await self.bus.emit("intervention",
                                             {"kind": "model_swap",
                                              "narration": f"{kw['side'].upper()} now runs on {kw['model']}"})
+                elif cmd == "persona":
+                    from .agents import PERSONAS
+                    p = kw["persona"]
+                    self.red_persona = p
+                    agent = self.agents.get("red")
+                    if agent:
+                        agent.set_persona(p)
+                    await self.bus.emit("intervention",
+                                        {"kind": "persona",
+                                         "narration": f"RED persona → "
+                                                      f"{PERSONAS.get(p, {}).get('label', p)}"})
             except Exception:  # noqa: BLE001
                 log.exception("command %s failed", cmd)
 
@@ -377,6 +393,33 @@ class GameEngine:
                     action="SCAN", args={"host": h.id},
                     description=f"SCAN from {h.id} — fingerprint vulns on ALL known hosts "
                                 f"(new: {', '.join(sorted(unrevealed))}) (low noise)"))
+        # PHISH_USER: target users whose creds sit on a discovered host
+        for u in self.users.values():
+            pending = [c for c in self.creds.values()
+                       if c.owner == u.id and not c.stolen and not c.rotated
+                       and self.hosts[c.stored_on].discovered]
+            if pending:
+                chance = 0.45 if u.privileged else 0.7
+                acts.append(ActionSpec(
+                    action="PHISH_USER", args={"user": u.id},
+                    description=f"PHISH_USER {u.name} ({u.role}{' PRIVILEGED' if u.privileged else ''}) "
+                                f"— targeted phishing, ~{chance:.0%} success, steals {len(pending)} "
+                                f"cred(s) wherever stored (grants: "
+                                f"{', '.join(sorted({c.grants for c in pending}))})"))
+        # C2_BEACON: persistence on an owned host (survives one ISOLATE unless investigated)
+        for h in self._controlled(include_internet=False):
+            if not h.beacon:
+                acts.append(ActionSpec(
+                    action="C2_BEACON", args={"host": h.id},
+                    description=f"C2_BEACON on {h.id} — plant persistence: the next ISOLATE fails "
+                                f"to evict unless BLUE investigates this host first"))
+        # DEFENSE_EVASION: wipe logs on an owned host (future detection noise ×0.4)
+        for h in self._controlled(include_internet=False):
+            if h.id not in self.evasion:
+                acts.append(ActionSpec(
+                    action="DEFENSE_EVASION", args={"host": h.id},
+                    description=f"DEFENSE_EVASION on {h.id} — wipe logs/artifacts: future actions "
+                                f"involving this host are much harder to detect"))
         for i, a in enumerate(acts):
             a.index = i
         return acts
@@ -434,6 +477,16 @@ class GameEngine:
                                 f"reveals true compromise status"))
             if len([a for a in acts if a.action == "INVESTIGATE"]) >= 10:
                 break
+        # THREAT_HUNT: sweep a whole zone — reveals true status + burns C2 beacons
+        for zone in ("dmz", "corp", "servers", "restricted"):
+            hosts_in_zone = [h for h in self.hosts.values()
+                             if h.zone == zone and not h.investigated and h.kind != "internet"]
+            if hosts_in_zone:
+                acts.append(ActionSpec(
+                    action="THREAT_HUNT", args={"zone": zone},
+                    description=f"THREAT_HUNT in {zone} zone — sweep {len(hosts_in_zone)} "
+                                f"un-investigated host(s): reveals true compromise status "
+                                f"and removes hidden C2 beacons"))
         for i, a in enumerate(acts):
             a.index = i
         return acts
@@ -455,6 +508,9 @@ class GameEngine:
             entry = {"id": h.id, "kind": h.kind, "zone": h.zone,
                      "criticality": h.criticality, "owned": h.compromised,
                      "isolated": h.isolated}
+            if h.compromised:
+                entry["beacon"] = h.beacon
+                entry["evasion"] = h.id in self.evasion
             if h.vulns_revealed or h.compromised:
                 entry["vulns"] = [{"id": v.id, "cve": v.cve_label, "sev": v.severity,
                                    "exploit": v.exploitability, "noise": v.noise,
@@ -568,6 +624,45 @@ class GameEngine:
             rec.narration = (f"RED pivots to {hid} using stolen {c.kind} of "
                              f"{self.users[c.owner].name} — quiet and clean")
 
+        elif spec.action == "PHISH_USER":
+            u = self.users[spec.args["user"]]
+            noise = NOISE["PHISH_USER"]
+            chance = 0.45 if u.privileged else 0.7
+            rec.success = self.rng.random() < chance
+            if rec.success:
+                got = [c for c in self.creds.values()
+                       if c.owner == u.id and not c.stolen and not c.rotated]
+                for c in got:
+                    c.stolen = True
+                    self.mirror.write(queries.SET_CRED, id=c.id, props={"stolen": True})
+                grants = ", ".join(sorted({c.grants for c in got}))
+                rec.narration = (f"RED's phishing email lands: {u.name} ({u.role}) hands over "
+                                 f"{len(got)} credential(s) (grants: {grants})")
+            else:
+                rec.narration = (f"RED phishes {u.name} ({u.role}) — they report the email "
+                                 f"to IT instead. No creds.")
+            # phishing flows through the mail gateway: that's where sensors see it
+            mail = self.hosts.get("SKR-MAIL-01")
+            target = mail if mail and mail.discovered else None
+
+        elif spec.action == "C2_BEACON":
+            h = self.hosts[spec.args["host"]]
+            h.beacon = True
+            changed.add(h.id)
+            self.mirror.write(queries.SET_HOST, id=h.id, props={"beacon": True})
+            rec.success = True
+            noise = NOISE["C2_BEACON"]
+            rec.narration = (f"RED plants a C2 beacon on {h.id} — persistence established, "
+                             f"will survive an ISOLATE unless investigated")
+
+        elif spec.action == "DEFENSE_EVASION":
+            h = self.hosts[spec.args["host"]]
+            self.evasion.add(h.id)
+            rec.success = True
+            noise = NOISE["DEFENSE_EVASION"]
+            rec.narration = (f"RED wipes logs and artifacts on {h.id} — "
+                             f"future activity there is much harder to detect")
+
         elif spec.action == "EXFILTRATE":
             rec.success = True
             noise = NOISE["EXFILTRATE"]
@@ -606,19 +701,30 @@ class GameEngine:
         elif spec.action == "ISOLATE":
             h = self.hosts[spec.args["host"]]
             was_compromised = h.compromised
-            h.isolated = True
-            h.compromised = False
             cost = self._isolate_cost(h)
-            self.impact += cost
-            changed.add(h.id)
-            for e in self.edges:
-                if e.src == h.id or e.dst == h.id:
-                    e.blocked = True
-                    self.mirror.write(queries.SET_EDGE_BLOCKED, src=e.src, dst=e.dst, blocked=True)
-            self.mirror.write(queries.SET_HOST, id=h.id,
-                              props={"isolated": True, "compromised": False})
-            rec.narration = (f"BLUE isolates {h.id} (impact +{cost})"
-                             + (" — attacker EVICTED from the host" if was_compromised else ""))
+            if h.beacon and not h.investigated:
+                # hidden C2 beacon re-establishes the foothold: isolation breaks, attacker stays
+                h.beacon = False
+                self.impact += cost
+                changed.add(h.id)
+                self.mirror.write(queries.SET_HOST, id=h.id, props={"beacon": False})
+                rec.narration = (f"BLUE tries to isolate {h.id} (impact +{cost}) — but a hidden "
+                                 f"C2 beacon re-established the attacker's foothold! ISOLATION "
+                                 f"FAILED. Investigate the host to burn persistence.")
+            else:
+                h.isolated = True
+                h.compromised = False
+                self.impact += cost
+                changed.add(h.id)
+                for e in self.edges:
+                    if e.src == h.id or e.dst == h.id:
+                        e.blocked = True
+                        self.mirror.write(queries.SET_EDGE_BLOCKED, src=e.src, dst=e.dst,
+                                          blocked=True)
+                self.mirror.write(queries.SET_HOST, id=h.id,
+                                  props={"isolated": True, "compromised": False})
+                rec.narration = (f"BLUE isolates {h.id} (impact +{cost})"
+                                 + (" — attacker EVICTED from the host" if was_compromised else ""))
 
         elif spec.action == "ROTATE_CREDS":
             u = self.users[spec.args["user"]]
@@ -663,9 +769,34 @@ class GameEngine:
             h = self.hosts[spec.args["host"]]
             h.investigated = True
             changed.add(h.id)
-            self.mirror.write(queries.SET_HOST, id=h.id, props={"investigated": True})
+            props = {"investigated": True}
             verdict = "COMPROMISED — attacker present!" if h.compromised else "clean"
+            if h.beacon:
+                h.beacon = False
+                props["beacon"] = False
+                verdict += " Hidden C2 beacon FOUND and removed — persistence burned."
+            self.mirror.write(queries.SET_HOST, id=h.id, props=props)
             rec.narration = f"BLUE investigates {h.id}: {verdict}"
+
+        elif spec.action == "THREAT_HUNT":
+            zone = spec.args["zone"]
+            swept = [h for h in self.hosts.values()
+                     if h.zone == zone and not h.investigated and h.kind != "internet"]
+            found, burned = [], 0
+            for h in swept:
+                h.investigated = True
+                changed.add(h.id)
+                props = {"investigated": True}
+                if h.compromised:
+                    found.append(h.id)
+                if h.beacon:
+                    h.beacon = False
+                    burned += 1
+                    props["beacon"] = False
+                self.mirror.write(queries.SET_HOST, id=h.id, props=props)
+            rec.narration = (f"BLUE threat-hunts the {zone} zone: {len(swept)} host(s) swept, "
+                             f"{len(found)} compromised ({', '.join(sorted(found)) or 'none'})"
+                             + (f", {burned} C2 beacon(s) burned" if burned else ""))
 
         await self._emit_patch(changed)
         return rec
@@ -681,6 +812,8 @@ class GameEngine:
                                       "confidence": round(confidence, 2)})
 
     async def _roll_detection(self, host: str, noise: float, kind: str):
+        if host in self.evasion:
+            noise *= EVASION_FACTOR
         if host and self.rng.random() < noise:
             conf = min(0.95, noise + self.rng.random() * 0.35)
             await self._raise_alert(host, kind, conf)

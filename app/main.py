@@ -42,7 +42,8 @@ def create_app() -> FastAPI:
             if settings.neo4j_enabled else False
         engine = GameEngine(settings, bus, Mirror(enabled=neo4j_ok))
         if settings.aiand_enabled:
-            engine.agents["red"] = Agent("red", settings.ATTACKER_MODEL, settings)
+            engine.agents["red"] = Agent("red", settings.ATTACKER_MODEL, settings,
+                                         persona=engine.red_persona)
             engine.agents["blue"] = Agent("blue", settings.DEFENDER_MODEL, settings)
             await _fetch_models()
             await _prewarm()
@@ -132,6 +133,16 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "LLM not configured (heuristic mode)"}, status_code=409)
         await engine.command_queue.put(("model_swap", {"side": side, "model": model}))
         return {"queued": True}
+
+    @app.post("/api/persona")
+    async def persona(body: dict):
+        from .agents import PERSONAS
+        p = body.get("persona")
+        if p not in PERSONAS:
+            return JSONResponse({"error": f"persona must be one of {sorted(PERSONAS)}"},
+                                status_code=400)
+        await engine.command_queue.put(("persona", {"persona": p}))
+        return {"queued": True, "label": PERSONAS[p]["label"]}
 
     @app.get("/api/models")
     async def models():

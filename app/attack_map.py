@@ -25,6 +25,15 @@ ACTION_TECHNIQUES: dict[str, list[dict]] = {
     "EXFILTRATE": [
         {"id": "T1041", "name": "Exfiltration Over C2 Channel", "tactic": "Exfiltration"},
     ],
+    "PHISH_USER": [
+        {"id": "T1566", "name": "Phishing", "tactic": "Initial Access"},
+    ],
+    "C2_BEACON": [
+        {"id": "T1071", "name": "Application Layer Protocol (C2)", "tactic": "Command and Control"},
+    ],
+    "DEFENSE_EVASION": [
+        {"id": "T1070", "name": "Indicator Removal", "tactic": "Defense Evasion"},
+    ],
     # ---- BLUE (ATT&CK Mitigations / D3FEND counters) ----
     "PATCH": [
         {"id": "M1051", "name": "Update Software", "tactic": "Mitigation"},
@@ -41,12 +50,15 @@ ACTION_TECHNIQUES: dict[str, list[dict]] = {
     "DEPLOY_HONEYPOT": [
         {"id": "D3-DE", "name": "Decoy Environment", "tactic": "Deception"},
     ],
+    "THREAT_HUNT": [
+        {"id": "M1047", "name": "Audit (threat hunt sweep)", "tactic": "Mitigation"},
+    ],
 }
 
 # column order for the frontend heatmap
 TACTIC_ORDER = [
     "Discovery", "Initial Access", "Credential Access", "Defense Evasion",
-    "Lateral Movement", "Exfiltration", "Mitigation", "Deception",
+    "Command and Control", "Lateral Movement", "Exfiltration", "Mitigation", "Deception",
 ]
 
 ATTACK_URL = "https://attack.mitre.org/techniques/{id}/"

@@ -36,8 +36,17 @@ so the first turn of a demo is never a cold call.
 ## How a match works
 
 - RED gets 1 action/turn (SCAN, EXPLOIT, HARVEST_CREDS, LATERAL_MOVE,
-  EXFILTRATE). BLUE gets 2 action points/turn (PATCH, ISOLATE, ROTATE_CREDS,
-  DEPLOY_HONEYPOT, INVESTIGATE).
+  EXFILTRATE, **PHISH_USER**, **C2_BEACON**, **DEFENSE_EVASION**). BLUE gets 2
+  action points/turn (PATCH, ISOLATE, ROTATE_CREDS, DEPLOY_HONEYPOT,
+  INVESTIGATE, **THREAT_HUNT**).
+- **Phishing** steals a user's creds from afar (45% privileged / 70% regular —
+  detection rolls on the mail gateway). **C2_BEACON** plants persistence: the
+  next ISOLATE on that host *fails* unless BLUE investigates first. INVESTIGATE
+  and **THREAT_HUNT** (whole-zone sweep) burn beacons. **DEFENSE_EVASION**
+  wipes logs: future detection noise on that host ×0.4.
+- **RED personas** (footer dropdown, LLM games): Patient APT (default),
+  Ransomware crew (fast & loud), Ghost (evasion-first, beacons everywhere).
+  Swappable mid-game via `/api/persona`.
 - RED sees only discovered hosts (fog of war); BLUE sees the full topology but
   never the true compromised flags — only a noisy alert queue (~15% false
   positives). INVESTIGATE reveals a host's true status.
@@ -164,6 +173,11 @@ Golden seed: **6** — the committed `replays/golden.jsonl` is a full LLM match
 on this seed (DeepSeek RED vs Kimi BLUE, ~20 rounds, BLUE holds the line,
 full after-action report included). Run `scripts/find_seed.py` to scout other
 dramatic seeds.
+
+Balance baseline (heuristic vs heuristic, 40 matches, seeds 2000-2039):
+**RED 17.5% / BLUE 82.5%** — measured with `scripts/benchmark.py` after the
+Tier-3 actions were added (a naive always-on THREAT_HUNT dropped RED to 7.5%;
+the benchmark caught it and the heuristic now hunts only reactively).
 
 ## Troubleshooting
 

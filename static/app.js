@@ -158,6 +158,7 @@ function nodeTooltip(node) {
     n.compromised ? '<span class="tt-flag red">COMPROMISED</span>' : "",
     n.isolated ? '<span class="tt-flag blue">ISOLATED</span>' : "",
     n.honeypot ? '<span class="tt-flag gold">HONEYPOT</span>' : "",
+    n.beacon ? '<span class="tt-flag red">📡 C2 BEACON</span>' : "",
     n.crown ? '<span class="tt-flag gold">👑 CROWN JEWEL</span>' : "",
   ].filter(Boolean).join(" ");
   const vulns = (n.vulns || []).map((v) => {
@@ -454,7 +455,7 @@ function openTimeline() {
 // ---------------------------------------------------------------- ATT&CK heatmap
 const attackState = { techniques: new Map() };  // id -> {id, name, tactic, count, side}
 const TACTIC_ORDER = ["Discovery", "Initial Access", "Credential Access", "Defense Evasion",
-  "Lateral Movement", "Exfiltration", "Mitigation", "Deception"];
+  "Command and Control", "Lateral Movement", "Exfiltration", "Mitigation", "Deception"];
 
 function trackTechniques(list, side) {
   for (const t of list || []) {
@@ -569,6 +570,8 @@ function initControls() {
   };
   document.getElementById("model-red").onchange = (e) =>
     post("/api/model", { side: "red", model: e.target.value });
+  document.getElementById("persona-red").onchange = (e) =>
+    post("/api/persona", { persona: e.target.value });
   document.getElementById("model-blue").onchange = (e) =>
     post("/api/model", { side: "blue", model: e.target.value });
   document.getElementById("view-god").onclick = () => setView("god");

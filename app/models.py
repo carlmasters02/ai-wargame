@@ -18,6 +18,7 @@ class Host(BaseModel):
     discovered: bool = False
     investigated: bool = False
     vulns_revealed: bool = False  # RED has scanned this host's vuln details
+    beacon: bool = False          # RED C2 persistence: survives ISOLATE unless investigated
 
 
 class Edge(BaseModel):
