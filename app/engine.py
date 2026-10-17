@@ -14,7 +14,8 @@ import random
 from collections import deque
 from datetime import datetime, timezone
 
-from . import attack_map, cases as cases_mod, exposure, generator, intel, queries, scoring, telemetry
+from . import (attack_map, cases as cases_mod, exposure, generator, intel, queries, scenarios,
+               scoring, telemetry)
 from .models import ActionSpec, Alert, Credential, GraphSpec, Host, LogEvent, TurnRecord, Vuln
 from .paths import count_viable_paths
 
@@ -51,6 +52,7 @@ class GameEngine:
         self._human_future: asyncio.Future | None = None
         self._human_legal: list = []
         self.red_persona = "apt"  # survives resets, like the agents themselves
+        self.scenario = "baseline"
         self._report_task: asyncio.Task | None = None
         self._clear()
 
@@ -120,8 +122,10 @@ class GameEngine:
         return reach
 
     # -------------------------------------------------------- graph mirror
-    async def reset(self, seed: int):
+    async def reset(self, seed: int, scenario: str | None = None):
         await self.stop()
+        if scenario is not None:
+            self.scenario = scenario if scenario in scenarios.SCENARIOS else "baseline"
         if self._report_task and not self._report_task.done():
             self._report_task.cancel()  # a late report must not land in (or stop recording) the next match
         self._report_task = None
@@ -131,8 +135,9 @@ class GameEngine:
             self._human_future.cancel()
         self._human_future = None
         spec, used_seed = generator.generate_with_guarantee(seed)
-        await self._install_spec(spec)
-        log.info("game reset with seed %d (%d hosts)", used_seed, len(self.hosts))
+        await self._install_spec(spec, scenario=self.scenario)
+        log.info("game reset with seed %d (%d hosts), scenario=%s",
+                 used_seed, len(self.hosts), self.scenario)
 
     async def load_network(self, spec):
         """Load an imported (digital-twin) network instead of a generated one."""
@@ -148,8 +153,11 @@ class GameEngine:
         await self._install_spec(spec)
         log.info("imported network loaded (%d hosts, crown jewel %s)", len(self.hosts), self.cj)
 
-    async def _install_spec(self, spec):
+    async def _install_spec(self, spec, scenario: str | None = None):
         self.load_spec(spec)
+        self._scenario_note = ""
+        if scenario and scenario != "baseline":
+            self._scenario_note = scenarios.apply(self, scenario)
         if self.mirror.enabled:
             m = self.mirror
             await m.flush()  # in-flight writes from the old match must land BEFORE the wipe
@@ -191,6 +199,8 @@ class GameEngine:
             "max_rounds": self.s.MAX_TURNS,
             "round": self.round,
             "actions": len(self.turns),
+            "scenario": self.scenario,
+            "scenario_note": getattr(self, "_scenario_note", ""),
         }
 
     def _vuln_rows(self, hid: str) -> list[dict]:

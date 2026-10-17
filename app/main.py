@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agents import PERSONAS, Agent
+from .scenarios import SCENARIOS
 from .config import settings
 from .db import Mirror, init_driver
 from .engine import GameEngine
@@ -61,7 +62,9 @@ def _status_payload() -> dict:
             "speed": engine.speed, "persona": engine.red_persona,
             "auth": bool(settings.WARGAME_TOKEN),
             "models": {side: (a.model if a else "heuristic") for side, a in engine.agents.items()},
-            "players": engine.control, "available_models": available_models}
+            "players": engine.control, "available_models": available_models,
+            "scenario": engine.scenario,
+            "scenarios": [{"id": k, "label": v["label"], "desc": v["desc"]} for k, v in SCENARIOS.items()]}
 
 
 @asynccontextmanager
@@ -160,12 +163,17 @@ def create_app() -> FastAPI:
 
     @app.post("/api/reset", dependencies=guarded)
     async def reset(request: Request):
+        body = await _body(request)
         try:
-            seed = int((await _body(request)).get("seed", settings.GAME_SEED))
+            seed = int(body.get("seed", settings.GAME_SEED))
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="seed must be an integer")
-        await engine.reset(seed)
-        return {"seed": engine.spec.seed, "hosts": len(engine.hosts)}
+        scenario = body.get("scenario")
+        if scenario is not None and scenario not in SCENARIOS:
+            raise HTTPException(status_code=400, detail=f"unknown scenario {scenario!r}")
+        await engine.reset(seed, scenario=scenario)
+        return {"seed": engine.spec.seed, "hosts": len(engine.hosts),
+                "scenario": engine.scenario, "scenario_note": engine._scenario_note}
 
     @app.post("/api/import", dependencies=guarded)
     async def import_network(request: Request):

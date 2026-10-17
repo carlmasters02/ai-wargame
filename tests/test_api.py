@@ -46,3 +46,10 @@ def test_control_and_human_action_validation(client):
     assert r.status_code == 409 and r.json()["ok"] is False
     assert client.post("/api/act", json={"indices": "nope"}).status_code == 400
     client.post("/api/control", json={"side": "blue", "who": "auto"})
+
+
+def test_reset_with_scenario(client):
+    r = client.post("/api/reset", json={"seed": 6, "scenario": "ransomware"})
+    assert r.status_code == 200 and r.json()["scenario"] == "ransomware"
+    assert client.post("/api/reset", json={"seed": 6, "scenario": "bogus"}).status_code == 400
+    client.post("/api/reset", json={"seed": 6, "scenario": "baseline"})

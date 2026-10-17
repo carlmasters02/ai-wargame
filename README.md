@@ -431,6 +431,23 @@ mid-match):
 
 ---
 
+## 11a. Scenario library
+
+The footer **scenario** selector starts a match from a realistic incident archetype
+instead of a clean perimeter — each configures the opening and tells a specific story:
+
+| Scenario | Opening |
+|---|---|
+| 🎯 Baseline APT | Patient attacker from the perimeter (default). |
+| 🔥 Ransomware outbreak | Fast, loud crew already inside the DMZ. |
+| 🕴 Insider threat | A privileged credential leaked to the attacker. |
+| 💥 Zero-day storm | Unpatchable pre-auth RCEs planted on internal hosts. |
+| ☁ Cloud exposure | A misconfigured, internet-exposed data store. |
+| 📦 Supply-chain compromise | A trusted internal system ships backdoored. |
+
+Deterministic given the seed; `POST /api/reset {seed, scenario}`. The scenario
+persists across campaign games.
+
 ## 12. Campaign mode and benchmarks
 
 **Campaign mode.** Choose BEST OF 3 or BEST OF 5 in the footer, then press

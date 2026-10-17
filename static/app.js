@@ -744,10 +744,22 @@ function applyStatus(p) {
   document.getElementById("red-model").textContent = p.models.red;
   document.getElementById("blue-model").textContent = p.models.blue;
   fillModelSelects(p.available_models || [], p.models);
+  fillScenarios(p.scenarios || [], p.scenario);
   applyControl(p);
   const persona = document.getElementById("persona-red");
   persona.disabled = !p.llm;
   persona.title = p.llm ? "RED persona (LLM games)" : "Personas need an LLM (AIAND_API_KEY) — heuristic mode";
+}
+
+function fillScenarios(list, current) {
+  const sel = document.getElementById("scenario");
+  if (!sel || (sel.dataset.filled && !list.length)) return;
+  if (list.length) {
+    sel.innerHTML = list.map((s) =>
+      `<option value="${s.id}" title="${escapeHtml(s.desc)}">${escapeHtml(s.label)}</option>`).join("");
+    sel.dataset.filled = "1";
+  }
+  if (current) sel.value = current;
 }
 
 function fillModelSelects(models, current) {
@@ -801,7 +813,16 @@ function initControls() {
   document.getElementById("btn-step").onclick = () => post("/api/step");
   document.getElementById("btn-reset").onclick = () => {
     resetCampaign();  // manual reset aborts the running series
-    post("/api/reset", { seed: parseInt(document.getElementById("seed").value || "42") });
+    post("/api/reset", { seed: parseInt(document.getElementById("seed").value || "42"),
+                         scenario: document.getElementById("scenario").value || "baseline" });
+  };
+  document.getElementById("scenario").onchange = (e) => {
+    resetCampaign();
+    post("/api/reset", { seed: parseInt(document.getElementById("seed").value || "42"),
+                         scenario: e.target.value }).then(async (r) => {
+      if (r) { const d = await r.json().catch(() => ({}));
+        if (d && d.scenario_note) addSystemCard(`🎬 scenario: ${d.scenario_note}`, "system"); }
+    });
   };
   document.getElementById("btn-zeroday").onclick = () => post("/api/intervene/zero_day");
   document.getElementById("btn-insider").onclick = () => post("/api/intervene/insider");
