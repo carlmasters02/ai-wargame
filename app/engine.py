@@ -47,6 +47,9 @@ class GameEngine:
         self._task: asyncio.Task | None = None
         self._step = False
         self.agents = {"red": None, "blue": None}  # None -> heuristic policy
+        self.control = {"red": "auto", "blue": "auto"}  # auto = AI/heuristic; human = wait for input
+        self._human_future: asyncio.Future | None = None
+        self._human_legal: list = []
         self.red_persona = "apt"  # survives resets, like the agents themselves
         self._report_task: asyncio.Task | None = None
         self._clear()
@@ -123,6 +126,9 @@ class GameEngine:
         self._report_task = None
         while not self.command_queue.empty():
             self.command_queue.get_nowait()
+        if self._human_future and not self._human_future.done():
+            self._human_future.cancel()
+        self._human_future = None
         spec, used_seed = generator.generate_with_guarantee(seed)
         self.load_spec(spec)
         if self.mirror.enabled:
@@ -267,7 +273,52 @@ class GameEngine:
 
     async def emit_state(self):
         await self.bus.emit("control", {"state": self.state, "speed": self.speed,
-                                        "persona": self.red_persona})
+                                        "persona": self.red_persona, "players": self.control})
+
+    def set_control(self, side: str, who: str):
+        """who = 'auto' (AI/heuristic) or 'human'. A human plays via /api/act."""
+        if side in self.control and who in ("auto", "human"):
+            self.control[side] = who
+            # if a human just handed control back mid-wait, let the AI take over
+            if who == "auto" and self._human_future and not self._human_future.done():
+                self._human_future.cancel()
+
+    async def _await_human(self, side, obs, legal, n_actions):
+        """Pause the loop and wait for the human to submit their action(s) via /api/act."""
+        self._human_legal = legal
+        self._human_future = asyncio.get_running_loop().create_future()
+        await self.bus.emit("your_turn", {
+            "side": side, "round": self.round, "n_actions": n_actions,
+            "observation": obs,
+            "legal": [{"index": a.index, "action": a.action, "description": a.description}
+                      for a in legal]})
+        t0 = asyncio.get_running_loop().time()
+        try:
+            chosen = await self._human_future
+        except asyncio.CancelledError:
+            return None, "", False, {}
+        finally:
+            self._human_future = None
+            await self.bus.emit("your_turn_end", {"side": side})
+        tel = {"latency_ms": int((asyncio.get_running_loop().time() - t0) * 1000),
+               "tokens": None, "model": "human"}
+        return chosen, "[human decision]", False, tel
+
+    def submit_human_action(self, indices: list[int]) -> tuple[bool, str]:
+        """Resolve a pending human turn with the chosen legal-action indices."""
+        fut = self._human_future
+        if fut is None or fut.done():
+            return False, "no human turn is waiting"
+        by_index = {a.index: a for a in self._human_legal}
+        picked = []
+        for i in indices:
+            a = by_index.get(i)
+            if a and a not in picked:
+                picked.append(a)
+        if not picked:
+            return False, "no valid action index"
+        fut.set_result(picked)
+        return True, "ok"
 
     async def submit(self, cmd: str, kw: dict):
         """Graph-mutating judge commands: queued while the loop runs (single writer),
@@ -377,15 +428,21 @@ class GameEngine:
         n_actions = 1 if side == "red" else 2
         obs = self.build_observation(side)
         agent = self.agents[side]
-        if agent is not None:
+        if self.control[side] == "human":
+            chosen, thought, fallback, tel = await self._await_human(side, obs, legal, n_actions)
+            if chosen is None:
+                return  # turn cancelled (reset/stop while waiting)
+        elif agent is not None:
             chosen, thought, fallback, tel = await agent.choose(self, obs, legal, n_actions)
         else:
             chosen = agent_mod.heuristic_choose(self, side, legal, n_actions)
             thought = "[heuristic policy — no LLM key configured]"
             fallback, tel = True, {"latency_ms": None, "tokens": None, "model": ""}
+        model_label = ("human" if self.control[side] == "human"
+                       else (agent.model if agent else "heuristic"))
         await self.bus.emit("agent_thought", {
             "side": side, "text": thought, "fallback": fallback,
-            "model": agent.model if agent else "heuristic", "round": self.round})
+            "model": model_label, "round": self.round})
 
         for spec in chosen:
             rec = await (self._resolve_red(spec) if side == "red" else self._resolve_blue(spec))

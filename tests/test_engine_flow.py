@@ -162,3 +162,25 @@ def test_phishing_is_an_independent_entry_vector(make_engine):
             E.random.Random.random = saved
         assert eng.hosts[endpoint].compromised
     run(go())
+
+
+def test_human_turn_waits_and_resolves(make_engine):
+    import asyncio
+
+    async def go():
+        eng, bus = make_engine(delay=0.0); eng.control["blue"] = "human"
+        await eng.reset(6); await eng.start()
+        # wait until BLUE's human turn is pending
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
+            if eng._human_future and not eng._human_future.done():
+                break
+        assert eng._human_future is not None and eng._human_legal
+        offered = [p for p in bus.of("your_turn") if p["side"] == "blue"]
+        assert offered and offered[0]["n_actions"] == 2
+        ok, _ = eng.submit_human_action([eng._human_legal[0].index, eng._human_legal[1].index])
+        assert ok
+        await asyncio.sleep(0.02)
+        assert any(t.side == "blue" and t.model == "human" for t in eng.turns)
+        await eng.stop()
+    run(go())

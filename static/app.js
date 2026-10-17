@@ -657,6 +657,8 @@ function handle(type, p) {
     case "report_pending": reportPending = p; break;
     case "status": applyStatus(p); break;
     case "control": applyControl(p); break;
+    case "your_turn": showTurnPanel(p); break;
+    case "your_turn_end": hideTurnPanel(); break;
     case "turn_start": pendingCard[p.side] = null; break;
     case "error": addSystemCard(`⚠ ${p.message || "server error"}`, "system"); break;
   }
@@ -682,6 +684,58 @@ function applyControl(p) {
     document.getElementById("speed-x").textContent = p.speed + "×";
   }
   if (p.persona) document.getElementById("persona-red").value = p.persona;
+  if (p.players) {
+    document.getElementById("play-red").value = p.players.red;
+    document.getElementById("play-blue").value = p.players.blue;
+  }
+}
+
+const turnState = { side: null, n: 1, picked: [] };
+
+function showTurnPanel(p) {
+  turnState.side = p.side; turnState.n = p.n_actions; turnState.picked = [];
+  const panel = document.getElementById("turn-panel");
+  panel.className = p.side;
+  document.getElementById("turn-head").innerHTML =
+    `🧑 YOUR MOVE — ${p.side.toUpperCase()} · round ${p.round} · ` +
+    `pick ${p.n_actions} action${p.n_actions > 1 ? "s" : ""}`;
+  const box = document.getElementById("turn-actions");
+  box.innerHTML = p.legal.map((a) =>
+    `<button class="turn-opt" data-i="${a.index}">
+       <span class="to-act">${escapeHtml(a.action)}</span>
+       <span class="to-desc">${escapeHtml(a.description)}</span>
+     </button>`).join("");
+  box.querySelectorAll(".turn-opt").forEach((btn) =>
+    btn.onclick = () => pickAction(parseInt(btn.dataset.i), btn));
+  document.getElementById("turn-submit").classList.toggle("hidden", p.n_actions < 2);
+  updateTurnHint();
+  panel.classList.remove("hidden");
+}
+
+function pickAction(i, btn) {
+  if (turnState.n === 1) { submitTurn([i]); return; }       // RED: one click submits
+  const at = turnState.picked.indexOf(i);
+  if (at >= 0) { turnState.picked.splice(at, 1); btn.classList.remove("sel"); }
+  else if (turnState.picked.length < turnState.n) { turnState.picked.push(i); btn.classList.add("sel"); }
+  updateTurnHint();
+  if (turnState.picked.length === turnState.n) submitTurn(turnState.picked.slice());
+}
+
+function updateTurnHint() {
+  const hint = document.getElementById("turn-hint");
+  if (hint) hint.textContent = turnState.n > 1
+    ? `${turnState.picked.length}/${turnState.n} selected`
+    : "click an action to play it";
+}
+
+async function submitTurn(indices) {
+  await post("/api/act", { indices });
+  hideTurnPanel();
+}
+
+function hideTurnPanel() {
+  turnState.side = null; turnState.picked = [];
+  document.getElementById("turn-panel").classList.add("hidden");
 }
 
 function applyStatus(p) {
@@ -760,6 +814,13 @@ function initControls() {
     post("/api/persona", { persona: e.target.value });
   document.getElementById("model-blue").onchange = (e) =>
     post("/api/model", { side: "blue", model: e.target.value });
+  document.getElementById("play-red").onchange = (e) =>
+    post("/api/control", { side: "red", who: e.target.value });
+  document.getElementById("play-blue").onchange = (e) =>
+    post("/api/control", { side: "blue", who: e.target.value });
+  document.getElementById("turn-submit").onclick = () => {
+    if (turnState.picked.length) submitTurn(turnState.picked.slice());
+  };
   document.getElementById("view-god").onclick = () => setView("god");
   document.getElementById("view-fit").onclick = () => { state.userNavigated = false; fitGraph(); };
   document.getElementById("view-red").onclick = () => setView("red");

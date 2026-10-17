@@ -71,14 +71,31 @@
   </select>
   <span id="campaign-score" class="hidden"></span>
   <button id="btn-board" class="ctl" title="Benchmark leaderboard">🏆</button>
+  <select id="play-red" class="models" title="Who plays RED">
+    <option value="auto">🤖 RED: AI</option>
+    <option value="human">🧑 RED: You</option>
+  </select>
   <select id="model-red" class="models" title="RED model"></select>
   <select id="persona-red" class="models" title="RED persona (LLM games)">
     <option value="apt">🥷 Patient APT</option>
     <option value="ransomware">🔥 Ransomware crew</option>
     <option value="ghost">👻 Ghost (stealth)</option>
   </select>
+  <select id="play-blue" class="models" title="Who plays BLUE">
+    <option value="auto">🤖 BLUE: AI</option>
+    <option value="human">🧑 BLUE: You</option>
+  </select>
   <select id="model-blue" class="models" title="BLUE model"></select>
 </footer>
+
+<div id="turn-panel" class="hidden">
+  <div id="turn-head"></div>
+  <div id="turn-actions"></div>
+  <div id="turn-foot">
+    <span id="turn-hint"></span>
+    <button id="turn-submit" class="ctl go hidden">SUBMIT</button>
+  </div>
+</div>
 
 <div id="banner" class="hidden">
   <div id="banner-text"></div>

@@ -36,3 +36,13 @@ def test_token_guards_mutations_but_not_spectating(client, monkeypatch):
     assert client.post("/api/pause", headers={"X-Wargame-Token": "s3cret"}).status_code == 200
     assert client.get("/api/state").status_code == 200
     assert client.get("/").status_code == 200
+
+
+def test_control_and_human_action_validation(client):
+    assert client.post("/api/control", json={"side": "blue", "who": "human"}).json()["players"]["blue"] == "human"
+    assert client.post("/api/control", json={"side": "blue", "who": "robot"}).status_code == 400
+    # no human turn is pending yet -> 409
+    r = client.post("/api/act", json={"indices": [0, 1]})
+    assert r.status_code == 409 and r.json()["ok"] is False
+    assert client.post("/api/act", json={"indices": "nope"}).status_code == 400
+    client.post("/api/control", json={"side": "blue", "who": "auto"})

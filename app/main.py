@@ -61,7 +61,7 @@ def _status_payload() -> dict:
             "speed": engine.speed, "persona": engine.red_persona,
             "auth": bool(settings.WARGAME_TOKEN),
             "models": {side: (a.model if a else "heuristic") for side, a in engine.agents.items()},
-            "available_models": available_models}
+            "players": engine.control, "available_models": available_models}
 
 
 @asynccontextmanager
@@ -199,6 +199,30 @@ def create_app() -> FastAPI:
                                 status_code=400)
         await engine.run_command("persona", {"persona": p})  # no graph mutation
         return {"queued": True, "label": PERSONAS[p]["label"]}
+
+    @app.post("/api/control", dependencies=guarded)
+    async def control(request: Request):
+        body = await _body(request)
+        side, who = body.get("side"), body.get("who")
+        if side not in ("red", "blue") or who not in ("auto", "human"):
+            return JSONResponse({"error": "side in {red,blue}, who in {auto,human}"},
+                                status_code=400)
+        engine.set_control(side, who)
+        await engine.emit_state()
+        return {"players": engine.control}
+
+    @app.post("/api/act", dependencies=guarded)
+    async def act(request: Request):
+        body = await _body(request)
+        raw = body.get("indices", [])
+        if not isinstance(raw, list):
+            return JSONResponse({"error": "indices must be a list of integers"}, status_code=400)
+        try:
+            indices = [int(i) for i in raw]
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "indices must be integers"}, status_code=400)
+        ok, msg = engine.submit_human_action(indices)
+        return JSONResponse({"ok": ok, "detail": msg}, status_code=200 if ok else 409)
 
     # ---- read-only ----
     @app.get("/api/models")

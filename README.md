@@ -341,6 +341,17 @@ models.
 
 ---
 
+### 7.5 Human vs AI
+
+Either side can be played by a person instead of a model: the footer **RED: AI /
+You** and **BLUE: AI / You** selectors switch control live. On your turn a **YOUR
+MOVE** panel shows the exact same numbered legal-action menu the AI gets — with
+the CVE, EPSS and KEV detail — and you pick 1 action (RED) or 2 (BLUE). Your
+turn is scored identically to a model's (it shows up tagged `human` in the
+scorecard and timeline), so you can measure yourself against the AI, or play BLUE
+against an AI attacker as hands-on SOC training. The game waits for your move; the
+AI opponent plays automatically between your turns.
+
 ## 8. The network generator
 
 Every network is generated deterministically from its **seed**: the same seed
