@@ -1,191 +1,562 @@
 # ⛩ AI Wargame — Autonomous Red vs. Blue on a Live Graph
 
-Two LLM agents fight a turn-based cyber wargame over a procedurally generated
-corporate network ("Sakura Logistics K.K.") that lives in **Neo4j Aura**.
-**RED** (DeepSeek via ai&) attacks with fog of war; **BLUE** (Kimi via ai&)
-defends using only a noisy alert queue. The headline metric — *viable attack
-paths to the crown jewel* — is recomputed every turn and charted live.
+Two AI agents fight a turn-based cyber wargame over a procedurally generated
+corporate network, **Sakura Logistics K.K.** **RED** (default: DeepSeek) is an
+attacker trying to steal the company's crown-jewel database. **BLUE** (default:
+Kimi) is the security team trying to stop it. You watch the fight live on an
+interactive network map, step in as the "judge" with surprise events, swap the
+AI models mid-game, and export the match as real MITRE ATT&CK / STIX artifacts.
 
-Pure simulation: vulnerabilities are abstract game objects with CVE-style
-labels. No real exploit code, no real scanning, no real network interaction.
+> **Pure simulation.** Vulnerabilities are abstract game objects that carry
+> real CVE labels and real-world threat intel. There is no exploit code, no
+> scanning, and no real network traffic of any kind.
 
-## Setup
+**Contents**
+
+1. [Quick start](#1-quick-start)
+2. [Configuration](#2-configuration)
+3. [The dashboard](#3-the-dashboard)
+4. [Reading the network map](#4-reading-the-network-map)
+5. [Controls](#5-controls)
+6. [How a match works](#6-how-a-match-works)
+7. [The AI agents](#7-the-ai-agents)
+8. [The network generator](#8-the-network-generator)
+9. [Real-world threat intel](#9-real-world-threat-intel)
+10. [MITRE ATT&CK heatmap and exports](#10-mitre-attck-heatmap-and-exports)
+11. [Endgame: report and timeline](#11-endgame-report-and-timeline)
+12. [Campaign mode and benchmarks](#12-campaign-mode-and-benchmarks)
+13. [Replays and offline demos](#13-replays-and-offline-demos)
+14. [Neo4j integration (optional)](#14-neo4j-integration-optional)
+15. [API reference](#15-api-reference)
+16. [Scripts](#16-scripts)
+17. [Project layout](#17-project-layout)
+18. [Demo script (3 minutes)](#18-demo-script-3-minutes)
+19. [Troubleshooting](#19-troubleshooting)
+
+---
+
+## 1. Quick start
+
+Requires **Python 3.10+**.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env   # fill in NEO4J_* and AIAND_*
-.venv/bin/python scripts/check_models.py   # confirms ai& model IDs + Aura connectivity
-```
-
-**Neo4j gotcha:** in the Aura credentials file, `NEO4J_USERNAME` is the
-**instance ID** (e.g. `a1b2c3d4`), *not* `neo4j`. Copy all three fields from
-that file (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`) into `.env`.
-
-## Run
-
-```bash
+cp .env.example .env          # optional: add API keys (see below)
 .venv/bin/uvicorn app.main:app --port 8000
-# open http://localhost:8000  →  press ▶ START
 ```
 
-Without `AIAND_API_KEY` both sides play with built-in heuristic policies
-(fully playable offline demo). Without `NEO4J_*` the game runs in offline
-graph mode (Neo4j mirroring skipped). Both models are pre-warmed at startup
-so the first turn of a demo is never a cold call.
+Open **http://localhost:8000** and press **▶ START**.
 
-## How a match works
+No keys are needed to try it. Without an AI API key both sides play with
+built-in heuristic policies (a fully playable offline game), and without Neo4j
+credentials the game simply skips mirroring the board to a database.
 
-- RED gets 1 action/turn (SCAN, EXPLOIT, HARVEST_CREDS, LATERAL_MOVE,
-  EXFILTRATE, **PHISH_USER**, **C2_BEACON**, **DEFENSE_EVASION**). BLUE gets 2
-  action points/turn (PATCH, ISOLATE, ROTATE_CREDS, DEPLOY_HONEYPOT,
-  INVESTIGATE, **THREAT_HUNT**).
-- **Phishing** steals a user's creds from afar (45% privileged / 70% regular —
-  detection rolls on the mail gateway). **C2_BEACON** plants persistence: the
-  next ISOLATE on that host *fails* unless BLUE investigates first. INVESTIGATE
-  and **THREAT_HUNT** (whole-zone sweep) burn beacons. **DEFENSE_EVASION**
-  wipes logs: future detection noise on that host ×0.4.
-- **RED personas** (footer dropdown, LLM games): Patient APT (default),
-  Ransomware crew (fast & loud), Ghost (evasion-first, beacons everywhere).
-  Swappable mid-game via `/api/persona`.
-- RED sees only discovered hosts (fog of war); BLUE sees the full topology but
-  never the true compromised flags — only a noisy alert queue (~15% false
-  positives). INVESTIGATE reveals a host's true status.
-- House rules that keep games dramatic: **max 1 PATCH per turn** (change
-  window), and the **perimeter firewall can't be isolated** (would take the
-  business offline) — BLUE must defend it with patching and monitoring.
-- Win conditions: RED wins by exfiltrating the crown jewel; BLUE wins by
-  fully evicting RED or surviving `MAX_TURNS` (20) rounds.
+---
 
-## Real-world threat intel
+## 2. Configuration
 
-Every CVE in the pool is enriched with **live data**: EPSS exploit probability
-(FIRST.org) and CISA Known-Exploited-Vulnerabilities flags
-(`scripts/fetch_intel.py` → committed cache `data/cve_intel.json`, so games
-stay deterministic and demos work offline). EPSS is blended into exploit
-success odds, shown in host tooltips (hover any node) and in the LLM action
-menus — the agents literally reason over the same intel a real SOC uses.
-25 of the 29 pooled CVEs are on CISA's KEV list.
+All settings live in `.env` (copy `.env.example`). Every value is optional.
 
-## MITRE ATT&CK, live and exportable
+| Variable | Default | What it does |
+|---|---|---|
+| `AIAND_API_KEY` | *(empty)* | Key for the ai& inference API (OpenAI-compatible). Empty → both sides use heuristic policies. |
+| `AIAND_BASE_URL` | `https://api.aiand.example/v1` | API base URL. Any OpenAI-compatible endpoint works. |
+| `ATTACKER_MODEL` | `deepseek-chat` | Starting model for RED. |
+| `DEFENDER_MODEL` | `kimi-k2` | Starting model for BLUE. |
+| `REPORT_MODEL` | `kimi-k2` | Model that writes the after-action report. |
+| `NEO4J_URI` | *(empty)* | Neo4j Aura URI, e.g. `neo4j+s://xxxx.databases.neo4j.io`. |
+| `NEO4J_USER` (or `NEO4J_USERNAME`) | `neo4j` | On Aura this is the **instance ID**, not `neo4j`. |
+| `NEO4J_PASSWORD` | *(empty)* | Neo4j password. |
+| `GAME_SEED` | `42` | Network seed loaded at startup. |
+| `MAX_TURNS` | `20` | Number of rounds BLUE must survive. |
+| `PATH_METRIC_IMPL` | `python` | Reserved. The engine currently always uses the Python path metric. |
 
-Every action is tagged with its ATT&CK technique (RED) or mitigation (BLUE) and
-accumulates into a **live ATT&CK heatmap** under the graph. When the match ends,
-export the fight as a real artifact:
+Recommended live-demo models (fast, reliable JSON): `deepseek-ai/deepseek-v4-pro`,
+`moonshotai/kimi-k3`, `openai/gpt-oss-120b`. Avoid `zai-org/glm-5.3` for live
+play: it reasons too long and keeps hitting the time budget.
 
-- **🗺 ATT&CK LAYER** — Navigator layer JSON (`/api/export/navigator`), imports
-  straight into https://mitre-attack.github.io/attack-navigator/
-- **📦 STIX BUNDLE** — STIX 2.1 bundle (`/api/export/stix`) with attack-pattern
-  objects + external references, importable into TIP tooling
-
-## Benchmarks & campaign mode
-
-`scripts/benchmark.py` plays N headless matches per (RED, BLUE) pairing and
-writes `benchmarks/leaderboard.{json,md}` — win rates, avg rounds, fallback
-rate. LLM pairings run concurrently (`--concurrency`); heuristic baselines
-finish in milliseconds. The **🏆** button in the UI renders the latest board.
+Check that your model IDs and Neo4j connection work before a demo:
 
 ```bash
-.venv/bin/python scripts/benchmark.py -n 30                       # heuristic baseline
+.venv/bin/python scripts/check_models.py
+```
+
+---
+
+## 3. The dashboard
+
+```
+┌──────────────────────────── TOP BAR: round · attack paths · sparkline · stats ─────────────────────────┐
+│ RED PANEL            │                 NETWORK MAP                 │ BLUE PANEL                         │
+│ RED's reasoning and  │   live graph of the company network         │ ALERT QUEUE (what BLUE can see)    │
+│ actions, newest      │   [GOD VIEW | RED VIEW]  (top-right)        │ BLUE's reasoning and actions       │
+│ first                │   MITRE ATT&CK heatmap bar  (bottom)        │                                    │
+└──────────────────────┴─────────────────────────────────────────────┴────────────────────────────────────┘
+  CONTROLS: start · pause · step · speed · judge buttons · seed/reset · campaign · 🏆 · models · persona
+```
+
+**Top bar**
+
+| Stat | Meaning |
+|---|---|
+| **ROUND** | Current round / `MAX_TURNS`. |
+| **ATTACK PATHS TO CROWN JEWEL** | The headline metric: how many viable routes RED currently has to the crown jewel (see [§6.7](#67-the-attack-path-metric)). Shows `250+` when capped. The sparkline beside it charts this number over the match. |
+| **HOSTS PWNED** | Hosts RED controls right now (the internet itself isn't counted). |
+| **BUSINESS IMPACT** | Total cost of BLUE's isolations. Cutting hosts off the network hurts the business. |
+| **ALERTS** | Every alert raised so far, including false positives. |
+
+**Side panels.** Each turn adds a card: the agent's thought (💭), then each
+action with ✔/✘ and a one-line result. Cards show which model produced them,
+a **FALLBACK** badge when the heuristic policy played instead of the AI, and
+ATT&CK technique chips. Judge events appear as grey system cards in both feeds.
+The **ALERT QUEUE** shows BLUE's last 8 alerts with a confidence bar;
+honeypot hits are highlighted.
+
+---
+
+## 4. Reading the network map
+
+### Node colours = network zones
+
+The network is layered from the internet inward:
+
+| Colour | Zone | Hosts |
+|---|---|---|
+| Grey | **Internet** | `INTERNET`, RED's starting point. |
+| Orange | **DMZ** (public-facing) | `SKR-FW-01` firewall, `SKR-WEB-01/02` web servers, `SKR-MAIL-01` mail server. |
+| Blue | **Corp** (office) | `SKR-APP-01` app server, `SKR-WS-0xx` employee workstations. |
+| Purple | **Servers** | `SKR-DC-01` domain controller, `SKR-FS-01/02` file servers, `SKR-DB-01` database, `SKR-APP-02`, `SKR-BKP-01` backup, sometimes `SKR-S3-01` cloud bucket. |
+| Red | **Restricted** | `SKR-DB-PROD` (the crown jewel), `SKR-BKP-02`. |
+
+### Markers
+
+| What you see | Meaning |
+|---|---|
+| **Solid pulsing red glow** | **Compromised.** RED controls this host right now. |
+| **Gold ring + glow, larger node** | **The crown jewel** (`SKR-DB-PROD`). RED wins by exfiltrating it. |
+| **Thin pulsing red ring + thick glowing red links** | The **shortest viable attack path** from RED's position to the crown jewel. |
+| **Magenta diamond** (GOD VIEW only) | A **honeypot** BLUE deployed (`SKR-HP-01`…). Hidden in RED VIEW because RED doesn't know it's fake. |
+| **Dark grey node with dashed grey ring** | **Isolated.** BLUE cut it off the network. |
+| **Faded, see-through node** (GOD VIEW only) | RED hasn't discovered this host yet. |
+| **Dashed grey link** | Connection blocked by an isolation. |
+| **Red dots travelling along a link** | RED just moved laterally with stolen credentials. |
+
+### GOD VIEW vs RED VIEW
+
+The toggle in the top-right of the map switches perspective. **GOD VIEW** shows
+the whole network, honeypots included. **RED VIEW** shows only what the
+attacker has discovered: the fog of war RED is actually playing under.
+
+### Hover tooltips
+
+Hover over a node's **dot** to see its kind, zone, OS, criticality, status
+flags (compromised, isolated, honeypot, 📡 C2 beacon, 👑 crown jewel) and every
+vulnerability with its CVE, severity, **EPSS** exploit probability and badges
+for **CISA KEV** and **ZERO-DAY**. Patched vulns are struck through.
+
+---
+
+## 5. Controls
+
+### Bottom bar
+
+| Control | What it does |
+|---|---|
+| **▶ START** | Starts (or resumes) the match. Does nothing on a finished match; press RESET first. |
+| **⏸ PAUSE / ▶ RESUME** | Pauses once the current turn finishes; the label follows the server's real state. |
+| **⏭ STEP** | Plays exactly **one side's turn** (RED's 1 action, or BLUE's 2) and then pauses. Works from idle, paused, or running. Alternates RED → BLUE → RED… |
+| **SPEED** slider | 0.5× to 6× pacing between turns (base delay 3 s). |
+| **💣 INJECT ZERO-DAY** | Judge event: drops `CVE-2026-1337` (exploit 0.9, near-silent) on a random clean corp/servers host. If RED already knows that host, it hears about the bug immediately. The attack-path count usually spikes. |
+| **🕴 INSIDER THREAT** | Judge event: an insider hands RED one credential, preferring a privileged user's. |
+| **SEED** + **↺ RESET** | Generates a fresh network from that seed and resets the match. Also aborts a running campaign. |
+| **Campaign selector** | SINGLE MATCH / BEST OF 3 / BEST OF 5. See [§12](#12-campaign-mode-and-benchmarks). |
+| **🏆** | Opens the benchmark leaderboard. |
+| **RED / BLUE model dropdowns** | Every model on your ai& account. Takes effect on the **next turn, mid-game, no restart**. Disabled in heuristic mode. |
+| **RED persona dropdown** | Patient APT / Ransomware crew / Ghost. See [§7.3](#73-red-personas). Disabled in heuristic mode. |
+
+Judge buttons, model swaps and persona changes work at any time: during a
+match, while paused, or before START.
+
+### Endgame buttons
+
+When a match ends a banner announces the winner with buttons for the
+**📋 AFTER-ACTION REPORT**, **🕒 MATCH TIMELINE**, **🗺 ATT&CK LAYER** and
+**📦 STIX BUNDLE**. Close the banner (**✕ CLOSE**) to inspect the final map;
+the same four buttons stay docked bottom-right.
+
+---
+
+## 6. How a match works
+
+### 6.1 Turn structure
+
+A match is up to `MAX_TURNS` (default 20) **rounds**. Each round, **RED takes
+1 action**, then **BLUE takes 2 actions**. Each turn the engine:
+
+1. builds the side's **observation** (what that side is allowed to know),
+2. lists every **legal action** as a numbered menu,
+3. asks the agent (AI or heuristic) to pick by number,
+4. resolves the action with seeded dice and updates the network,
+5. rolls for **detection**, recomputes the **attack-path metric**, and
+   streams everything to the browser.
+
+### 6.2 Win conditions
+
+| Winner | How |
+|---|---|
+| **RED** | Exfiltrates the crown jewel `SKR-DB-PROD`. |
+| **BLUE** | Fully evicts RED (zero compromised hosts after RED had a foothold), **or** survives all `MAX_TURNS` rounds. |
+
+### 6.3 RED's actions
+
+RED starts at `INTERNET` and only knows the firewall in front of it.
+
+| Action | Effect | Detection noise |
+|---|---|---|
+| **SCAN** | From an owned host: reveals the vulnerabilities of every host RED has discovered. | 0.15 |
+| **EXPLOIT** | Attacks a revealed vuln on a reachable host. Success chance = the vuln's exploitability. Success compromises the host and reveals its neighbours (their vulns stay hidden until a SCAN). | per vuln |
+| **HARVEST_CREDS** | Steals every credential stored on an owned host. | 0.40 |
+| **LATERAL_MOVE** | Uses a stolen, unrotated credential to take over the host it grants. **Always succeeds**, quietly. | 0.20 |
+| **PHISH_USER** | Targets an employee whose credentials sit on a discovered host. 45% success on privileged users, 70% on regular ones. Steals all of that user's credentials wherever they're stored. Detection is rolled at the mail gateway. | 0.30 |
+| **C2_BEACON** | Plants persistence on an owned host: the **next ISOLATE on it fails** (and still costs BLUE the impact) unless BLUE investigates first. | 0.25 |
+| **DEFENSE_EVASION** | Wipes logs on an owned host: detection noise for actions targeting it ×0.4 from now on. | 0.10 |
+| **EXFILTRATE** | Only once the crown jewel is owned. **RED wins.** | 0.80 |
+
+### 6.4 BLUE's actions
+
+| Action | Effect |
+|---|---|
+| **PATCH** | Permanently fixes a vuln (menu shows the 12 most severe). **Max one PATCH per turn** (change window); a second one fails. |
+| **ISOLATE** | Cuts a flagged host off the network and evicts RED from it. Costs business impact = criticality, ×2 in servers/restricted zones. The perimeter firewall **can't** be isolated (it would take the business offline). |
+| **ROTATE_CREDS** | Invalidates every credential of a user, killing any RED has stolen. |
+| **DEPLOY_HONEYPOT** | Adds a decoy host beside a chosen host (near the crown jewel, an alerted host, the DC or DB-01; max 3 per match). It's reachable from that host **and** from everything upstream of it. Touching it gives BLUE a guaranteed 97%-confidence alert, and RED gets no foothold. |
+| **INVESTIGATE** | Reveals a host's true status right now, and burns any C2 beacon on it. |
+| **THREAT_HUNT** | Investigates every not-recently-checked host in a whole zone at once and burns their beacons. |
+
+### 6.5 Fog of war
+
+- **RED** sees only hosts it has discovered. Compromising a host reveals its
+  neighbours; their vulnerabilities stay hidden until a SCAN.
+- **BLUE** sees the full topology and every unpatched vuln, but **never** sees
+  which hosts are compromised. It works from the alert queue and investigations.
+- **Investigations are snapshots.** A host found clean can be compromised a
+  round later. A verdict goes stale after 3 rounds, or as soon as a newer alert
+  hits that host; then BLUE may investigate again.
+
+### 6.6 Alerts and false positives
+
+Every RED action rolls for detection: an alert fires with probability equal to
+the action's noise (×0.4 on hosts where RED wiped logs), with a confidence
+score. After each BLUE turn there's a 15% chance of a **false positive** on a
+clean host. False positives look exactly like real alerts (same alert types),
+so BLUE has to investigate to tell them apart.
+
+### 6.7 The attack-path metric
+
+After every action the engine counts **viable attack paths** from RED's
+positions (the internet plus every compromised host) to the crown jewel, up
+to 8 hops, capped at 250. A path is viable when:
+
+- every link on it is unblocked,
+- no host on it is isolated or a honeypot,
+- every host after the start is *breachable*: already compromised, has an
+  unpatched vuln, or is granted by a credential RED has stolen and BLUE hasn't
+  rotated.
+
+It's a live read of how exposed the company is: patching, rotating and
+isolating push it down; exploits, stolen creds and zero-days push it up. The
+shortest such path is highlighted in red on the map.
+
+---
+
+## 7. The AI agents
+
+### 7.1 How they decide
+
+Each turn an agent receives its observation (JSON) plus a **numbered list of
+concrete legal actions**, and answers with JSON:
+
+```json
+{"thought": "<= 60 words", "action_index": 3}          // RED
+{"thought": "<= 60 words", "action_indices": [0, 7]}   // BLUE
+```
+
+Picking by number means the model can never invent an illegal move. The answer
+parser tolerates code fences and stray text, and falls back to reading the
+model's reasoning trace if the reply is empty.
+
+### 7.2 Fallback and timing
+
+Each side gets a hard **30-second budget** per turn (up to two attempts). If
+the model is too slow or answers garbage, the built-in heuristic policy plays
+that turn instead, the card shows a **FALLBACK** badge, and the game never
+stalls. With no API key, both sides are heuristic for the whole match.
+
+### 7.3 RED personas
+
+Changeable from the footer dropdown at any time (LLM games only):
+
+| Persona | Play style |
+|---|---|
+| 🥷 **Patient APT** (default) | Quiet credential play, careful exploitation. |
+| 🔥 **Ransomware crew** | Fast and loud: exploits over credentials, goes straight for high-value hosts, ignores beacons and evasion. |
+| 👻 **Ghost** | Obsessively stealthy: wipes logs before every noisy move and beacons every owned server. |
+
+### 7.4 Model switching
+
+The model dropdowns list every model on the ai& account (fetched at startup)
+and switch on the next turn, mid-game, with no restart. The panel header and
+each feed card show which model produced it. `.env` only sets the starting
+models.
+
+---
+
+## 8. The network generator
+
+Every network is generated deterministically from its **seed**: the same seed
+always gives the same company and, with heuristic agents, the same match.
+
+- A layered topology: internet → firewall → DMZ → corp → servers → restricted,
+  with 10–14 workstations and an optional cloud bucket and second file server.
+- **Deliberate misconfigurations**: a workstation with a direct line into the
+  servers zone, backups reachable from corp, a DMZ host that can reach an
+  internal database.
+- **Credential-reuse chains**: an SSH key on a web server opens the app server,
+  a backup admin's password on the backup server opens the domain controller,
+  a Kerberos ticket on the DC opens the crown jewel, plus decoys.
+- Vulnerabilities drawn from a pool of 29 real CVEs (Log4Shell, Zerologon,
+  Citrix Bleed, regreSSHion, …) matched to each host type.
+- A **guarantee check** ensures at least 3 distinct attack paths of 4–8 hops
+  exist from the internet to the crown jewel; otherwise it moves to the next
+  seed.
+
+---
+
+## 9. Real-world threat intel
+
+Every CVE in the pool carries live intel from two free sources:
+
+- **EPSS** (FIRST.org): the probability a CVE gets exploited in the wild in the
+  next 30 days. Blended 20% into each vuln's exploit odds.
+- **CISA KEV**: whether the CVE is on the Known Exploited Vulnerabilities list
+  (25 of the 29 are).
+
+The data is cached in `data/cve_intel.json`, which is committed so games stay
+deterministic and demos work offline. Refresh it with
+`.venv/bin/python scripts/fetch_intel.py`. The intel shows in host tooltips and
+in the agents' action menus, so the AIs reason over the same signals a real SOC
+uses.
+
+---
+
+## 10. MITRE ATT&CK heatmap and exports
+
+Every action is tagged with an ATT&CK technique (RED, e.g. `T1190` Exploit
+Public-Facing Application) or mitigation (BLUE, e.g. `M1051` Update Software).
+The **heatmap bar** under the map groups them by tactic and counts uses live.
+
+When a match ends you can export it from the banner (the endpoints also work
+mid-match):
+
+- **🗺 ATT&CK LAYER**: a Navigator layer JSON (`/api/export/navigator`) of
+  RED's successful techniques. Import it at
+  https://mitre-attack.github.io/attack-navigator/.
+- **📦 STIX BUNDLE**: a STIX 2.1 bundle (`/api/export/stix`) with
+  attack-pattern objects and references, importable into threat-intel tooling.
+
+---
+
+## 11. Endgame: report and timeline
+
+- **📋 After-action report**: written by `REPORT_MODEL` from the full turn log:
+  outcome, timeline, ATT&CK mapping table, turning points (where the path count
+  shifted) and three recommendations for BLUE. It opens automatically a couple
+  of seconds after the match ends. Without an API key (or if the model fails) a
+  deterministic summary report is used instead.
+- **🕒 Match timeline**: every action, alert and judge intervention in order,
+  with match stats (actions per side, alerts, interventions).
+
+---
+
+## 12. Campaign mode and benchmarks
+
+**Campaign mode.** Choose BEST OF 3 or BEST OF 5 in the footer, then press
+START. When a game ends, the next one starts automatically 6 seconds later on
+the next seed, with a live series scoreboard (`GAME 2/3 · 🔴 1 — 0 🔵`). The
+series ends with a champion card. RESET aborts the series.
+
+**Benchmarks.** `scripts/benchmark.py` plays N headless matches per RED/BLUE
+pairing and writes `benchmarks/leaderboard.{json,md}` (win rates, average
+rounds, fallback rate). The 🏆 button shows the latest board.
+
+```bash
+.venv/bin/python scripts/benchmark.py -n 30                       # heuristic baseline (~1 s)
 .venv/bin/python scripts/benchmark.py --red deepseek-ai/deepseek-v4-pro \
     --blue moonshotai/kimi-k3 -n 4 --concurrency 2                # LLM vs LLM
 ```
 
-The footer **campaign selector** (BEST OF 3 / BEST OF 5) auto-plays consecutive
-seeds with a live series scoreboard — one click, a whole match series.
+Options: `-n/--matches`, `--seed-start` (default 1000), `--red`, `--blue`
+(model IDs; omit for heuristic), `--concurrency` (default 4), `--out`.
 
-## Judge controls (bottom bar)
+**Balance baseline** (heuristic vs heuristic, 40 matches, seeds 2000–2039):
+**RED 15% / BLUE 85%**.
 
-START / PAUSE / STEP, speed slider, **INJECT ZERO-DAY**, **INSIDER THREAT**,
-seed + RESET, per-side **model dropdowns** (see below), and a GOD VIEW /
-RED VIEW fog-of-war toggle above the map.
+---
 
-## Model switching — yes, it's live
+## 13. Replays and offline demos
 
-The dropdowns list every model on the ai& account (fetched from
-`GET /models` at startup) and take effect on the **next turn, mid-game, no
-restart** — the feed labels each card with the model that produced it.
-`.env` only sets the *starting* models. If a model can't answer in time, the
-game silently falls back to a heuristic policy (tagged `[fallback]` in the
-feed) and never stalls.
-
-Demo-safe models (fast + clean JSON): `deepseek-ai/deepseek-v4-pro`,
-`moonshotai/kimi-k3`, `openai/gpt-oss-120b` (tested live, mid-game swaps
-verified). Avoid `zai-org/glm-5.3` for live play — it reasons too long and
-keeps hitting the token/time budget (you'll see `[fallback]` cards).
-
-## Endgame
-
-When the winner banner appears you can open the **📋 After-Action Report**
-(LLM-written: outcome, timeline, MITRE ATT&CK mapping, turning points,
-recommendations) or the **🕒 Match Timeline** (every action, alert, and judge
-intervention in order with match stats). Close the banner to inspect the
-final graph; both views stay available from the docked buttons bottom-right.
-
-## Offline replay (venue Wi-Fi insurance)
-
-Every match is recorded to `replays/*.jsonl`. A golden match is committed:
+Every live match is recorded to `replays/match_<time>_seed<N>.jsonl`
+(git-ignored). The replay server streams a recording over the exact same
+WebSocket contract, so the browser can't tell the difference: insurance if the
+venue Wi-Fi dies.
 
 ```bash
 .venv/bin/python -m app.replay replays/golden.jsonl --speed 2 --port 8000
 ```
 
-The frontend cannot tell the difference. `--speed` scales the original pacing
-(2× turns a ~5 min match into ~2.5 min).
+`--speed` scales the original pacing (2× turns a ~5-minute match into ~2.5).
+In replay mode the control buttons are no-ops and exports are unavailable.
 
-## Demo script (3 min)
+The committed **`replays/golden.jsonl`** is a full LLM match on seed 6
+(DeepSeek RED vs Kimi BLUE, 20 rounds, BLUE holds the line, report included).
+It was recorded on an earlier build, before phishing, C2 beacons, evasion and
+threat hunting existed, so those actions don't appear in it.
 
-1. (15s) "Every company's network is a graph. Attackers think in graphs;
-   defenders think in lists. We made two AIs fight on the graph."
-2. (60s) START the golden-seed match. Toggle RED VIEW (fog of war) ↔ GOD VIEW.
-   Point at the attack-path counter + sparkline.
-3. (30s) Judge clicks INJECT ZERO-DAY → path count spikes → BLUE reacts.
-4. (45s) RED vs BLUE reasoning side by side; swap a model live
-   (ai& = one-line model change).
-5. (30s) Game over → MATCH TIMELINE to narrate the fight, then the
-   after-action report with MITRE ATT&CK mapping.
+---
 
-## Architecture
+## 14. Neo4j integration (optional)
+
+With `NEO4J_*` set, the network lives in **Neo4j** as the game board: hosts,
+connections, vulns, users and credentials as nodes and relationships, plus a
+`:Turn` node for every action linked to the host it affected. The engine stays
+authoritative in memory and mirrors each change to Neo4j in the background, so
+database latency never slows the game.
+
+> ⚠ **RESET wipes the entire database** (`MATCH (n) DETACH DELETE n`) before
+> writing the new network. Use a dedicated Aura instance.
+
+For a database showcase, `app/queries.py` holds Cypher versions of the
+attack-path metric (`METRIC_PATHS`, `SHORTEST_PATH`) you can paste into the
+Aura browser during a match.
+
+---
+
+## 15. API reference
+
+### REST
+
+| Method | Path | Body | Purpose |
+|---|---|---|---|
+| POST | `/api/start` | | Start / resume. |
+| POST | `/api/pause` | | Pause. |
+| POST | `/api/resume` | | Resume. |
+| POST | `/api/step` | | Play one side's turn, then pause. |
+| POST | `/api/speed` | `{"x": 2.0}` | Set speed (0.25–8). |
+| POST | `/api/reset` | `{"seed": 6}` | New network + new match. |
+| POST | `/api/intervene/zero_day` | | Judge: inject a zero-day. |
+| POST | `/api/intervene/insider` | | Judge: insider threat. |
+| POST | `/api/model` | `{"side": "red", "model": "…"}` | Swap a side's model. |
+| POST | `/api/persona` | `{"persona": "apt"\|"ransomware"\|"ghost"}` | Change RED's persona. |
+| GET | `/api/models` | | Available and current models. |
+| GET | `/api/state` | | State, round, winner, metrics, intel status. |
+| GET | `/api/export/navigator` | | ATT&CK Navigator layer. |
+| GET | `/api/export/stix` | | STIX 2.1 bundle. |
+| GET | `/api/benchmarks` | | Latest leaderboard JSON. |
+
+### WebSocket `/ws`
+
+The server pushes `{"type": …, "payload": …}` events:
+
+| Event | When |
+|---|---|
+| `graph_snapshot` | On connect and on reset: the full network. |
+| `graph_patch` | Host flags, new honeypots, blocked links, updated vulns. |
+| `metrics` | After every action: paths, shortest path, stats. |
+| `status` | On connect: models, state, speed, persona. |
+| `control` | Whenever the run state changes (running / paused / game over). |
+| `turn_start` | A side's turn begins. |
+| `agent_thought` | The agent's reasoning, model used, fallback flag. |
+| `action_result` | Each resolved action with narration and ATT&CK techniques. |
+| `alert` | A new alert in BLUE's queue. |
+| `intervention` | Judge event, model swap or persona change. |
+| `game_over` | Winner, reason, rounds. |
+| `report` | The after-action report (markdown). |
+| `error` | The game loop crashed; see the server log. |
+
+---
+
+## 16. Scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/check_models.py` | Confirms your ai& model IDs answer and Neo4j connects. Run before any demo. |
+| `scripts/smoke_test.py [seeds…]` | Full headless heuristic games, a determinism check and a BLUE fog-of-war leak check. |
+| `scripts/gen_test.py` | Generates seeds 0–19 and verifies the path guarantee (plus a Neo4j/Cypher cross-check if configured). |
+| `scripts/find_seed.py [n]` | Plays `n` seeds and ranks them by drama, to pick a good demo seed. |
+| `scripts/fetch_intel.py` | Refreshes `data/cve_intel.json` from EPSS and CISA KEV. |
+| `scripts/benchmark.py` | Headless leaderboard; see [§12](#12-campaign-mode-and-benchmarks). |
+
+---
+
+## 17. Project layout
 
 ```
 app/
-  main.py       FastAPI: static, /ws, REST controls (all mutations via engine command queue)
-  engine.py     game loop, legal actions, resolution, detection, win checks (single writer)
-  generator.py  seeded procedural network + path-guarantee check (>= 3 paths, len 4-8)
-  paths.py      viable-attack-path metric (pure Python, capped DFS + BFS shortest)
-  queries.py    all Cypher (schema writes, Cypher metric variants, Turn log)
-  agents.py     LLM agents (action-by-index JSON contract, repair ladder, heuristics)
-  report.py     after-action report (LLM with static fallback)
-  events.py     WS broadcaster + JSONL match recorder
-  replay.py     offline replay server
-  intel.py      EPSS/KEV enrichment (deterministic committed cache)
-  attack_map.py action → MITRE ATT&CK technique/mitigation mapping
-  export.py     ATT&CK Navigator layer + STIX 2.1 bundle builders
-scripts/
-  check_models.py   P0 gate: ai& model IDs + Neo4j connectivity
-  gen_test.py       P1 gate: 20 seeds × guarantee check (+ Aura write & Cypher cross-check)
-  smoke_test.py     P3 gate: full headless heuristic games + BLUE fog-of-war leak test
-  find_seed.py      P7: drama-scored seed picker
-  fetch_intel.py    refresh data/cve_intel.json from FIRST.org EPSS + CISA KEV
-  benchmark.py      N headless matches per model pairing → leaderboard.{json,md}
+  main.py        FastAPI app: static files, /ws, REST controls
+  engine.py      game loop, legal actions, resolution, detection, win checks (single source of truth)
+  agents.py      LLM agents (prompts, personas, JSON contract, fallback) + heuristic policies
+  generator.py   seeded procedural network + attack-path guarantee
+  paths.py       viable-attack-path metric (pure Python)
+  models.py      data models: hosts, edges, vulns, credentials, actions, alerts, turns
+  intel.py       EPSS/KEV enrichment from the committed cache
+  attack_map.py  action → MITRE ATT&CK technique / mitigation mapping
+  export.py      ATT&CK Navigator layer + STIX 2.1 bundle builders
+  report.py      after-action report (LLM, with static fallback)
+  events.py      WebSocket broadcaster + JSONL match recorder
+  replay.py      offline replay server
+  db.py          Neo4j driver + background mirror
+  queries.py     all Cypher
+  config.py      settings from .env
+static/          index.html, app.js, style.css, vendored force-graph / Chart.js / marked
+data/            cve_intel.json (committed threat-intel cache)
+replays/         golden.jsonl + recorded matches
+benchmarks/      leaderboard.json / .md
+scripts/         see §16
 ```
 
-Golden seed: **6** — the committed `replays/golden.jsonl` is a full LLM match
-on this seed (DeepSeek RED vs Kimi BLUE, ~20 rounds, BLUE holds the line,
-full after-action report included). Run `scripts/find_seed.py` to scout other
-dramatic seeds.
+---
 
-Balance baseline (heuristic vs heuristic, 40 matches, seeds 2000-2039):
-**RED 17.5% / BLUE 82.5%** — measured with `scripts/benchmark.py` after the
-Tier-3 actions were added (a naive always-on THREAT_HUNT dropped RED to 7.5%;
-the benchmark caught it and the heuristic now hunts only reactively).
+## 18. Demo script (3 minutes)
 
-## Troubleshooting
+1. **(15 s)** "Every company's network is a graph. Attackers think in graphs;
+   defenders think in lists. We made two AIs fight on the graph."
+2. **(60 s)** START on seed 6. Toggle RED VIEW (fog of war) ↔ GOD VIEW. Point
+   at the attack-path counter and sparkline; hover a host to show real EPSS/KEV
+   intel.
+3. **(30 s)** The judge clicks **INJECT ZERO-DAY**: the path count spikes and
+   BLUE reacts.
+4. **(45 s)** Read RED's and BLUE's reasoning side by side; swap a model live
+   from the dropdown.
+5. **(30 s)** Game over: open the **MATCH TIMELINE** to narrate the fight, then
+   the **after-action report**, then download the ATT&CK layer.
 
-- **`Neo.ClientError.Security.Unauthorized` on startup** — almost always the
+---
+
+## 19. Troubleshooting
+
+- **`Neo.ClientError.Security.Unauthorized` on startup.** Almost always the
   username: on Aura it's the instance ID from the credentials file, not
-  `neo4j`. If that's right, reset the password (console → instance → ⋯ →
-  Reset Password). The game still runs in offline graph mode meanwhile.
-- **Kimi returns empty responses** — kimi-k3 is a reasoning model; it needs
-  `max_tokens` headroom for reasoning + answer (handled in `app/agents.py`).
-- **A model keeps showing `[fallback]` cards** — it's too slow or not
-  answering with JSON; pick another from the dropdown (see "Model switching").
+  `neo4j`. If that's right, reset the password in the Aura console. The game
+  keeps running in offline graph mode meanwhile.
+- **Cards keep showing FALLBACK.** The model is too slow or not answering with
+  JSON. Pick another from the dropdown (see [§2](#2-configuration)).
+- **Kimi returns empty responses.** kimi-k3 is a reasoning model and needs
+  token headroom for reasoning plus the answer; `app/agents.py` already allows
+  for it.
+- **Personas or model dropdowns are greyed out.** No `AIAND_API_KEY` is set, so
+  both sides are heuristic.
+- **START does nothing after a match.** The match is finished; press RESET (or
+  pick a new seed) to start another.
+- **A hover tooltip doesn't appear.** Point at the node's dot rather than its
+  label. Tooltips for nodes in the lower part of the map can be hidden behind
+  the ATT&CK bar.
