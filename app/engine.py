@@ -130,6 +130,24 @@ class GameEngine:
             self._human_future.cancel()
         self._human_future = None
         spec, used_seed = generator.generate_with_guarantee(seed)
+        await self._install_spec(spec)
+        log.info("game reset with seed %d (%d hosts)", used_seed, len(self.hosts))
+
+    async def load_network(self, spec):
+        """Load an imported (digital-twin) network instead of a generated one."""
+        await self.stop()
+        if self._report_task and not self._report_task.done():
+            self._report_task.cancel()
+        self._report_task = None
+        while not self.command_queue.empty():
+            self.command_queue.get_nowait()
+        if self._human_future and not self._human_future.done():
+            self._human_future.cancel()
+        self._human_future = None
+        await self._install_spec(spec)
+        log.info("imported network loaded (%d hosts, crown jewel %s)", len(self.hosts), self.cj)
+
+    async def _install_spec(self, spec):
         self.load_spec(spec)
         if self.mirror.enabled:
             m = self.mirror
@@ -153,7 +171,6 @@ class GameEngine:
         await self._emit_snapshot()
         await self._emit_metrics()
         await self.emit_state()
-        log.info("game reset with seed %d (%d hosts)", used_seed, len(self.hosts))
 
     def snapshot(self) -> dict:
         return {

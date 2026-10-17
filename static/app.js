@@ -850,10 +850,27 @@ function initControls() {
   };
   document.getElementById("btn-board").onclick = openBoard;
   document.getElementById("btn-exposure").onclick = openExposure;
+  document.getElementById("btn-import").onclick = () => document.getElementById("import-file").click();
+  document.getElementById("import-file").onchange = importNetwork;
   document.getElementById("exposure-close").onclick = () =>
     document.getElementById("exposure-modal").classList.add("hidden");
   document.getElementById("board-close").onclick = () =>
     document.getElementById("board-modal").classList.add("hidden");
+}
+
+async function importNetwork(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";  // allow re-importing the same file
+  if (!file) return;
+  const content = await file.text();
+  const fmt = file.name.toLowerCase().endsWith(".xml") ? "nmap" : "csv";
+  const r = await post("/api/import", { format: fmt, content });
+  if (!r) return;
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { addSystemCard(`⚠ import failed: ${d.error || r.status}`, "system"); return; }
+  resetCampaign();
+  addSystemCard(`⬆ imported ${file.name}: ${d.hosts} hosts, ${d.edges} connections, ` +
+    `crown jewel ${d.crown_jewel}, exposure ${d.exposure} paths. Press ▶ START or 🎯 for the fix plan.`, "system");
 }
 
 async function openExposure() {

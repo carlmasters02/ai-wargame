@@ -1,0 +1,37 @@
+# AI Wargame — sample imported network (digital twin)
+# Import via the ⬆ IMPORT button, or: curl -XPOST /api/import -d '{"format":"csv","content":"..."}'
+
+# hosts: id,kind,zone,criticality,crown
+EDGE-FW,firewall,dmz,8,no
+WEB-PORTAL,webserver,dmz,5,no
+MAIL,appserver,dmz,5,no
+APP-TIER,appserver,corp,6,no
+WS-FINANCE,workstation,corp,3,no
+WS-ENG,workstation,corp,3,no
+AD-DC,domain_controller,servers,9,no
+FILE-SRV,fileserver,servers,7,no
+CUSTOMER-DB,database,restricted,10,yes
+BACKUP,backup,servers,7,no
+
+# edges: src,dst
+EDGE-FW,WEB-PORTAL
+EDGE-FW,MAIL
+WEB-PORTAL,APP-TIER
+MAIL,APP-TIER
+APP-TIER,AD-DC
+APP-TIER,FILE-SRV
+WS-FINANCE,APP-TIER
+WS-ENG,APP-TIER
+WS-ENG,AD-DC
+AD-DC,CUSTOMER-DB
+FILE-SRV,BACKUP
+APP-TIER,CUSTOMER-DB
+
+# vulns: host,cve,severity,exploitability
+EDGE-FW,CVE-2024-3400,10,0.8
+WEB-PORTAL,CVE-2021-44228,10,0.85
+MAIL,CVE-2021-26855,9,0.7
+APP-TIER,CVE-2023-38408,9,0.6
+AD-DC,CVE-2020-1472,10,0.5
+FILE-SRV,CVE-2017-0144,9,0.65
+CUSTOMER-DB,CVE-2022-47966,9,0.4

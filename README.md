@@ -519,6 +519,22 @@ Aura browser during a match.
 
 ---
 
+## 13a. Digital twin — import a real network
+
+Play the wargame and run the exposure analysis on **your own** network, not just
+the synthetic one. The **⬆ IMPORT** button loads:
+
+- a **CSV asset inventory** (hosts, connections, known CVEs — `examples/sample_network.csv`
+  shows the format), or
+- an **Nmap XML** scan (hosts and the services between them).
+
+Imported networks skip the synthetic path guarantee (a real network is whatever
+it is), an internet beachhead is added automatically, and fog of war is seeded
+from the perimeter. `POST /api/import` takes `{"format": "csv"|"nmap", "content": "..."}`.
+Untrusted XML is parsed with `defusedxml` (XXE / billion-laughs safe). Once
+imported, press ▶ START to watch the AIs fight over your topology, or 🎯 for the
+prioritised fix plan for *your* exposure.
+
 ## 14a. Exposure analysis (prioritised remediation)
 
 The **🎯** button answers the question a CISO actually asks: *of everything we

@@ -26,7 +26,7 @@ from .config import settings
 from .db import Mirror, init_driver
 from .engine import GameEngine
 from .events import Broadcaster
-from . import export
+from . import export, importer
 from .intel import intel_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -166,6 +166,24 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="seed must be an integer")
         await engine.reset(seed)
         return {"seed": engine.spec.seed, "hosts": len(engine.hosts)}
+
+    @app.post("/api/import", dependencies=guarded)
+    async def import_network(request: Request):
+        body = await _body(request)
+        fmt = (body.get("format") or "csv").lower()
+        content = body.get("content") or ""
+        if not isinstance(content, str) or not content.strip():
+            return JSONResponse({"error": "content (CSV or Nmap XML text) required"}, status_code=400)
+        if len(content) > 2_000_000:
+            return JSONResponse({"error": "import too large (max 2 MB)"}, status_code=413)
+        try:
+            spec = importer.import_nmap(content) if fmt == "nmap" else importer.import_csv(content)
+        except importer.ImportError as e:
+            return JSONResponse({"error": f"import failed: {e}"}, status_code=400)
+        await engine.load_network(spec)
+        return {"hosts": len(engine.hosts), "crown_jewel": engine.cj,
+                "edges": len(engine.edges), "vulns": len(engine.vulns),
+                "exposure": engine.compute_metrics()["paths"]}
 
     # ---- judge interventions ----
     @app.post("/api/intervene/zero_day", dependencies=guarded)
