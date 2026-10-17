@@ -68,6 +68,22 @@ export the fight as a real artifact:
 - **📦 STIX BUNDLE** — STIX 2.1 bundle (`/api/export/stix`) with attack-pattern
   objects + external references, importable into TIP tooling
 
+## Benchmarks & campaign mode
+
+`scripts/benchmark.py` plays N headless matches per (RED, BLUE) pairing and
+writes `benchmarks/leaderboard.{json,md}` — win rates, avg rounds, fallback
+rate. LLM pairings run concurrently (`--concurrency`); heuristic baselines
+finish in milliseconds. The **🏆** button in the UI renders the latest board.
+
+```bash
+.venv/bin/python scripts/benchmark.py -n 30                       # heuristic baseline
+.venv/bin/python scripts/benchmark.py --red deepseek-ai/deepseek-v4-pro \
+    --blue moonshotai/kimi-k3 -n 4 --concurrency 2                # LLM vs LLM
+```
+
+The footer **campaign selector** (BEST OF 3 / BEST OF 5) auto-plays consecutive
+seeds with a live series scoreboard — one click, a whole match series.
+
 ## Judge controls (bottom bar)
 
 START / PAUSE / STEP, speed slider, **INJECT ZERO-DAY**, **INSIDER THREAT**,
@@ -141,6 +157,7 @@ scripts/
   smoke_test.py     P3 gate: full headless heuristic games + BLUE fog-of-war leak test
   find_seed.py      P7: drama-scored seed picker
   fetch_intel.py    refresh data/cve_intel.json from FIRST.org EPSS + CISA KEV
+  benchmark.py      N headless matches per model pairing → leaderboard.{json,md}
 ```
 
 Golden seed: **6** — the committed `replays/golden.jsonl` is a full LLM match

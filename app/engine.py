@@ -35,6 +35,7 @@ class GameEngine:
         self.state = "idle"  # idle|running|paused|game_over
         self.speed = 1.0
         self.turn_delay = 3.0
+        self.reports_enabled = True  # headless benchmarks set False (skip LLM report)
         self.command_queue: asyncio.Queue = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._step = False
@@ -758,7 +759,10 @@ class GameEngine:
         await self.bus.emit("game_over", {"winner": winner, "reason": reason,
                                           "rounds": self.round,
                                           "score": self.compute_metrics()})
-        asyncio.get_running_loop().create_task(self._emit_report())
+        if self.reports_enabled:
+            asyncio.get_running_loop().create_task(self._emit_report())
+        else:
+            self.bus.stop_recording()
 
     async def _emit_report(self):
         from .report import generate_report

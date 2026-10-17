@@ -5,6 +5,7 @@ control flags (pause/resume/step/speed) are safe to set directly.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -161,6 +162,15 @@ def create_app() -> FastAPI:
                                     engine.winner, engine.win_reason)
         return JSONResponse(bundle, headers={
             "Content-Disposition": "attachment; filename=match_stix_bundle.json"})
+
+    @app.get("/api/benchmarks")
+    async def benchmarks():
+        path = os.path.join(BASE, "benchmarks", "leaderboard.json")
+        if not os.path.exists(path):
+            return JSONResponse({"error": "no benchmark run yet — see scripts/benchmark.py"},
+                                status_code=404)
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
 
     return app
 

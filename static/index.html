@@ -59,6 +59,14 @@
   <span class="sep"></span>
   <label class="seed">SEED <input type="number" id="seed" value="42"></label>
   <button id="btn-reset" class="ctl">↺ RESET</button>
+  <span class="sep"></span>
+  <select id="campaign" class="models" title="Campaign: auto-play consecutive seeds">
+    <option value="0">SINGLE MATCH</option>
+    <option value="3">BEST OF 3</option>
+    <option value="5">BEST OF 5</option>
+  </select>
+  <span id="campaign-score" class="hidden"></span>
+  <button id="btn-board" class="ctl" title="Benchmark leaderboard">🏆</button>
   <select id="model-red" class="models" title="RED model"></select>
   <select id="model-blue" class="models" title="BLUE model"></select>
 </footer>
@@ -95,6 +103,14 @@
     <h2>🕒 MATCH TIMELINE</h2>
     <div id="timeline-summary"></div>
     <div id="timeline-body"></div>
+  </div>
+</div>
+
+<div id="board-modal" class="hidden">
+  <div id="report-card">
+    <button id="board-close">✕</button>
+    <h2>🏆 BENCHMARK LEADERBOARD</h2>
+    <div id="board-body"></div>
   </div>
 </div>
 

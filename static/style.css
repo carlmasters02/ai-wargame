@@ -143,6 +143,7 @@ body {
 .hidden { display: none !important; }
 
 #report-modal { position: fixed; inset: 0; background: rgba(5,8,14,.85); z-index: 60; display: flex; align-items: center; justify-content: center; }
+#board-modal { position: fixed; inset: 0; background: rgba(5,8,14,.85); z-index: 60; display: flex; align-items: center; justify-content: center; }
 #report-card {
   width: min(760px, 92vw); max-height: 84vh; overflow-y: auto;
   background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 26px 30px;
@@ -150,6 +151,7 @@ body {
 }
 #report-card h2 { margin-bottom: 12px; }
 #report-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--dim); font-size: 20px; cursor: pointer; }
+#board-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--dim); font-size: 20px; cursor: pointer; }
 #report-body { font-size: 14px; line-height: 1.55; }
 #report-body h2 { font-size: 17px; color: var(--gold); margin: 16px 0 6px; }
 #report-body table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin: 8px 0; }
@@ -196,3 +198,10 @@ body {
   background: #b8860b; color: #0a0e1a; letter-spacing: 0.04em;
 }
 .kev-badge.zero { background: #ff2d55; color: #fff; }
+
+/* ---- campaign scoreboard + leaderboard modal ---- */
+#campaign-score { font-size: 12px; font-weight: 700; color: var(--gold); white-space: nowrap; }
+#board-body table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
+#board-body th, #board-body td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
+#board-body th { background: var(--panel2); }
+#board-body code { background: var(--panel2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }

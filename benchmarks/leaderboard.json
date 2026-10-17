@@ -1,0 +1,162 @@
+{
+  "generated_at": "2026-10-17T05:40:38Z",
+  "wall_time_s": 0.2,
+  "pairings": [
+    {
+      "pairing": "heuristic vs heuristic",
+      "matches": 12,
+      "finished": 12,
+      "timeouts": 0,
+      "red_win_rate": 0.25,
+      "blue_win_rate": 0.75,
+      "avg_rounds": 19.4,
+      "avg_fallbacks_per_match": 0.0,
+      "results": [
+        {
+          "seed": 2000,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 36,
+          "fallbacks": 0,
+          "paths_final": 0,
+          "impact": 13.0,
+          "alerts": 3,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2001,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 41,
+          "fallbacks": 0,
+          "paths_final": 0,
+          "impact": 15.0,
+          "alerts": 10,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2002,
+          "winner": "red",
+          "reason": "crown jewel SKR-DB-PROD exfiltrated in round 14",
+          "rounds": 14,
+          "actions": 39,
+          "fallbacks": 0,
+          "paths_final": 4,
+          "impact": 11.0,
+          "alerts": 10,
+          "time_s": 0.04
+        },
+        {
+          "seed": 2003,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 41,
+          "fallbacks": 0,
+          "paths_final": 0,
+          "impact": 13.0,
+          "alerts": 7,
+          "time_s": 0.04
+        },
+        {
+          "seed": 2004,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 50,
+          "fallbacks": 0,
+          "paths_final": 19,
+          "impact": 23.0,
+          "alerts": 5,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2005,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 50,
+          "fallbacks": 0,
+          "paths_final": 0,
+          "impact": 18.0,
+          "alerts": 13,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2006,
+          "winner": "red",
+          "reason": "crown jewel SKR-DB-PROD exfiltrated in round 14",
+          "rounds": 14,
+          "actions": 37,
+          "fallbacks": 0,
+          "paths_final": 4,
+          "impact": 11.0,
+          "alerts": 7,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2007,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 42,
+          "fallbacks": 0,
+          "paths_final": 0,
+          "impact": 6.0,
+          "alerts": 4,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2008,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 51,
+          "fallbacks": 0,
+          "paths_final": 15,
+          "impact": 4.0,
+          "alerts": 6,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2009,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 55,
+          "fallbacks": 0,
+          "paths_final": 4,
+          "impact": 53.0,
+          "alerts": 9,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2010,
+          "winner": "blue",
+          "reason": "20 rounds survived \u2014 BLUE held the line",
+          "rounds": 21,
+          "actions": 52,
+          "fallbacks": 0,
+          "paths_final": 2,
+          "impact": 39.0,
+          "alerts": 9,
+          "time_s": 0.05
+        },
+        {
+          "seed": 2011,
+          "winner": "red",
+          "reason": "crown jewel SKR-DB-PROD exfiltrated in round 16",
+          "rounds": 16,
+          "actions": 41,
+          "fallbacks": 0,
+          "paths_final": 4,
+          "impact": 11.0,
+          "alerts": 6,
+          "time_s": 0.05
+        }
+      ]
+    }
+  ]
+}

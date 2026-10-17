@@ -357,6 +357,44 @@ function updateMetrics(p) {
 }
 
 // ---------------------------------------------------------------- game over / report
+const campaign = { total: 0, played: 0, baseSeed: 42, score: { red: 0, blue: 0 }, timer: null };
+
+function campaignLabel() {
+  const el = document.getElementById("campaign-score");
+  if (!campaign.total) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `GAME ${Math.min(campaign.played + 1, campaign.total)}/${campaign.total}
+    · 🔴 ${campaign.score.red} — ${campaign.score.blue} 🔵`;
+}
+
+function resetCampaign() {
+  if (campaign.timer) { clearTimeout(campaign.timer); campaign.timer = null; }
+  campaign.played = 0;
+  campaign.score = { red: 0, blue: 0 };
+  campaign.baseSeed = parseInt(document.getElementById("seed").value || "42");
+  campaignLabel();
+}
+
+function campaignAdvance(winner) {
+  if (!campaign.total) return;
+  if (winner === "red" || winner === "blue") campaign.score[winner] += 1;
+  campaign.played += 1;
+  campaignLabel();
+  if (campaign.played < campaign.total) {
+    addSystemCard(`🏆 campaign: game ${campaign.played + 1}/${campaign.total} starts shortly ` +
+      `(seed ${campaign.baseSeed + campaign.played})`);
+    campaign.timer = setTimeout(() => {
+      const seed = campaign.baseSeed + campaign.played;
+      document.getElementById("seed").value = seed;
+      post("/api/reset", { seed }).then(() => post("/api/start"));
+    }, 6000);
+  } else {
+    const s = campaign.score;
+    const champ = s.red === s.blue ? "DRAW" : (s.red > s.blue ? "🔴 RED" : "🔵 BLUE");
+    addSystemCard(`🏆 campaign over: ${champ} takes the series ${s.red}–${s.blue}`);
+  }
+}
+
 function showGameOver(p) {
   gameOverInfo = p;
   matchLog.push({ round: p.rounds, side: "sys", kind: "end",
@@ -368,6 +406,7 @@ function showGameOver(p) {
   txt.innerHTML = `${p.winner === "red" ? "🔴 RED WINS" : "🔵 BLUE WINS"}
     <small>${escapeHtml(p.reason)} — ${p.rounds} rounds</small>`;
   document.getElementById("endgame-dock").classList.remove("hidden");
+  campaignAdvance(p.winner);
 }
 
 function openReport() {
@@ -517,8 +556,10 @@ function initControls() {
     post(paused ? "/api/pause" : "/api/resume");
   };
   document.getElementById("btn-step").onclick = () => post("/api/step");
-  document.getElementById("btn-reset").onclick = () =>
+  document.getElementById("btn-reset").onclick = () => {
+    if (campaign.timer) { clearTimeout(campaign.timer); campaign.timer = null; }
     post("/api/reset", { seed: parseInt(document.getElementById("seed").value || "42") });
+  };
   document.getElementById("btn-zeroday").onclick = () => post("/api/intervene/zero_day");
   document.getElementById("btn-insider").onclick = () => post("/api/intervene/insider");
   const speed = document.getElementById("speed");
@@ -548,6 +589,39 @@ function initControls() {
   document.getElementById("banner-stix").onclick = stixDl;
   document.getElementById("dock-nav").onclick = navDl;
   document.getElementById("dock-stix").onclick = stixDl;
+  document.getElementById("campaign").onchange = (e) => {
+    campaign.total = parseInt(e.target.value);
+    resetCampaign();
+  };
+  document.getElementById("btn-board").onclick = openBoard;
+  document.getElementById("board-close").onclick = () =>
+    document.getElementById("board-modal").classList.add("hidden");
+}
+
+async function openBoard() {
+  const modal = document.getElementById("board-modal");
+  const body = document.getElementById("board-body");
+  modal.classList.remove("hidden");
+  try {
+    const r = await fetch("/api/benchmarks");
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    const d = await r.json();
+    body.innerHTML = `<p style="color:#7d8ba1">generated ${escapeHtml(d.generated_at)} ·
+      wall ${d.wall_time_s}s</p>
+      <table><tr><th>RED vs BLUE</th><th>matches</th><th>RED win</th><th>BLUE win</th>
+      <th>avg rounds</th><th>fallbacks</th></tr>
+      ${d.pairings.map((p) => `<tr><td>${escapeHtml(p.pairing)}</td>
+        <td>${p.finished}/${p.matches}</td>
+        <td style="color:#ff5c7c">${p.red_win_rate != null ? Math.round(p.red_win_rate * 100) + "%" : "-"}</td>
+        <td style="color:#6cb5ff">${p.blue_win_rate != null ? Math.round(p.blue_win_rate * 100) + "%" : "-"}</td>
+        <td>${p.avg_rounds ?? "-"}</td><td>${p.avg_fallbacks_per_match ?? 0}</td></tr>`).join("")}
+      </table>
+      <p style="color:#7d8ba1;font-size:12px">run <code>.venv/bin/python scripts/benchmark.py
+      --red &lt;model&gt; --blue &lt;model&gt; -n 10</code> to refresh</p>`;
+  } catch (e) {
+    body.innerHTML = `<p style="color:#7d8ba1">No benchmark data yet. Run
+      <code>.venv/bin/python scripts/benchmark.py -n 12</code> first.</p>`;
+  }
 }
 
 function setView(v) {
