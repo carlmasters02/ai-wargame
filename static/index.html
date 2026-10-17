@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI WARGAME — Red vs Blue on a Live Graph</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/vendor/force-graph.min.js"></script>
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">⛩ AI WARGAME <span class="sub">Sakura Logistics K.K. — autonomous red vs blue</span></div>
+  <div class="stat"><div class="label">ROUND</div><div class="value" id="st-round">–/–</div></div>
+  <div class="stat big"><div class="label">ATTACK PATHS TO CROWN JEWEL</div>
+    <div class="value paths" id="st-paths">0</div></div>
+  <div class="stat chart"><canvas id="sparkline"></canvas></div>
+  <div class="stat"><div class="label">HOSTS PWNED</div><div class="value red" id="st-comp">0</div></div>
+  <div class="stat"><div class="label">BUSINESS IMPACT</div><div class="value blue" id="st-impact">0</div></div>
+  <div class="stat"><div class="label">ALERTS</div><div class="value" id="st-alerts">0</div></div>
+</header>
+
+<main id="layout">
+  <aside id="red-panel" class="panel">
+    <div class="panel-head red-head">🔴 RED — <span id="red-model">DeepSeek</span></div>
+    <div id="red-feed" class="feed"></div>
+  </aside>
+
+  <section id="center">
+    <div id="graph-wrap"><div id="graph"></div></div>
+    <div id="view-toggle">
+      <button id="view-god" class="toggle active">🌐 GOD VIEW</button>
+      <button id="view-red" class="toggle">🥷 RED VIEW</button>
+    </div>
+  </section>
+
+  <aside id="blue-panel" class="panel">
+    <div class="panel-head blue-head">🔵 BLUE — <span id="blue-model">Kimi</span></div>
+    <div class="alerts-head">ALERT QUEUE</div>
+    <div id="alerts"></div>
+    <div id="blue-feed" class="feed"></div>
+  </aside>
+</main>
+
+<footer id="controls">
+  <button id="btn-start" class="ctl go">▶ START</button>
+  <button id="btn-pause" class="ctl">⏸ PAUSE</button>
+  <button id="btn-step" class="ctl">⏭ STEP</button>
+  <label class="speed">SPEED <input type="range" id="speed" min="0.5" max="6" step="0.25" value="1"><span id="speed-x">1×</span></label>
+  <span class="sep"></span>
+  <button id="btn-zeroday" class="ctl judge">💣 INJECT ZERO-DAY</button>
+  <button id="btn-insider" class="ctl judge">🕴 INSIDER THREAT</button>
+  <span class="sep"></span>
+  <label class="seed">SEED <input type="number" id="seed" value="42"></label>
+  <button id="btn-reset" class="ctl">↺ RESET</button>
+  <select id="model-red" class="models" title="RED model"></select>
+  <select id="model-blue" class="models" title="BLUE model"></select>
+</footer>
+
+<div id="banner" class="hidden">
+  <div id="banner-text"></div>
+  <div id="banner-actions">
+    <button id="banner-report" class="banner-btn">📋 AFTER-ACTION REPORT</button>
+    <button id="banner-timeline" class="banner-btn">🕒 MATCH TIMELINE</button>
+    <button id="banner-close" class="banner-btn dim">✕ CLOSE</button>
+  </div>
+</div>
+
+<div id="endgame-dock" class="hidden">
+  <button id="dock-report" class="banner-btn">📋 REPORT</button>
+  <button id="dock-timeline" class="banner-btn">🕒 TIMELINE</button>
+</div>
+
+<div id="report-modal" class="hidden">
+  <div id="report-card">
+    <button id="report-close">✕</button>
+    <h2>📋 AFTER-ACTION REPORT</h2>
+    <div id="report-body"></div>
+  </div>
+</div>
+
+<div id="timeline-modal" class="hidden">
+  <div id="timeline-card">
+    <button id="timeline-close">✕</button>
+    <h2>🕒 MATCH TIMELINE</h2>
+    <div id="timeline-summary"></div>
+    <div id="timeline-body"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
