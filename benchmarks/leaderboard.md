@@ -1,6 +1,6 @@
 # AI Wargame — Benchmark Leaderboard
 
-_2026-10-17T16:31:52Z — MAX_TURNS=20, 1.6s wall_
+_2026-10-17T17:19:13Z — MAX_TURNS=20, 1.7s wall_
 
 ## Pairings
 
