@@ -281,7 +281,17 @@ trip a rule — the false positives an analyst has to rule out. BLUE sees both t
 alert queue and the recent-events stream and triages like a real SOC: correlate
 an EDR hit with a follow-on remote logon, confirm with INVESTIGATE, then act.
 
-### 6.8 The attack-path metric
+### 6.8 SOC cases (incident workflow)
+
+Alerts don't float free — they roll up into **cases** (incidents), the way a SOC
+triages. The first alert on a host opens a case (`INC-001`…); more alerts fold in
+and raise its severity (low → critical, from confidence × asset criticality).
+INVESTIGATE or THREAT_HUNT moves it to *investigating* or **closes** it as a false
+positive; ISOLATE/REIMAGE marks it *contained*. The **📁 case board** shows the
+live queue, and the scorecard reports cases opened/contained, false positives, and
+**mean time to contain** — the metrics a SOC is actually measured on. `GET /api/cases`.
+
+### 6.9 The attack-path metric
 
 After every action the engine counts **viable attack paths** from RED's
 positions (the internet plus every compromised host) to the crown jewel, up

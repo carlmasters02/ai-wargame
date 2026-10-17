@@ -281,6 +281,7 @@ function clearFeeds() {
   document.getElementById("blue-feed").innerHTML = "";
   document.getElementById("alerts").innerHTML = "";
   const tb = document.getElementById("telemetry"); if (tb) tb.innerHTML = "";
+  caseCount = 0; const cb = document.getElementById("cases-badge"); if (cb) cb.textContent = "0";
 }
 
 const pendingCard = { red: null, blue: null };
@@ -649,6 +650,7 @@ function handle(type, p) {
     case "agent_thought": addThought(p); break;
     case "action_result": addResult(p); break;
     case "alert": addAlert(p); break;
+    case "case": bumpCases(); break;
     case "telemetry": addTelemetry(p); break;
     case "metrics": updateMetrics(p); break;
     case "intervention": onIntervention(p); break;
@@ -850,6 +852,9 @@ function initControls() {
   };
   document.getElementById("btn-board").onclick = openBoard;
   document.getElementById("btn-exposure").onclick = openExposure;
+  document.getElementById("btn-cases").onclick = openCases;
+  document.getElementById("cases-close").onclick = () =>
+    document.getElementById("cases-modal").classList.add("hidden");
   document.getElementById("btn-import").onclick = () => document.getElementById("import-file").click();
   document.getElementById("import-file").onchange = importNetwork;
   document.getElementById("exposure-close").onclick = () =>
@@ -871,6 +876,42 @@ async function importNetwork(e) {
   resetCampaign();
   addSystemCard(`⬆ imported ${file.name}: ${d.hosts} hosts, ${d.edges} connections, ` +
     `crown jewel ${d.crown_jewel}, exposure ${d.exposure} paths. Press ▶ START or 🎯 for the fix plan.`, "system");
+}
+
+let caseCount = 0;
+function bumpCases() { caseCount += 1; const b = document.getElementById("cases-badge"); if (b) b.textContent = caseCount; }
+
+const SEV_CLASS = { critical: "sev-crit", high: "sev-high", medium: "sev-med", low: "sev-low" };
+const STATUS_ICON = { open: "🔴", investigating: "🔍", contained: "✅", closed: "⚪" };
+
+function renderCases(d) {
+  const body = document.getElementById("cases-body");
+  const sum = document.getElementById("cases-summary");
+  const s = d.summary || {};
+  sum.innerHTML = `<span><b>${s.opened||0}</b> opened</span><span><b>${s.contained||0}</b> contained</span>
+    <span><b>${s.closed_false_positive||0}</b> false positive</span>
+    <span><b>${s.open||0}</b> open</span>
+    <span>MTTC <b>${s.mean_time_to_contain ?? "–"}</b></span>`;
+  const cases = d.cases || [];
+  body.innerHTML = cases.length ? `<table class="cases-table">
+    <tr><th>Incident</th><th>Host</th><th>Severity</th><th>Status</th><th>Alerts</th><th>Note</th></tr>
+    ${cases.map((c) => `<tr>
+      <td class="c-id">${escapeHtml(c.id)}</td>
+      <td>${escapeHtml(c.host)}</td>
+      <td><span class="sev ${SEV_CLASS[c.severity]||""}">${escapeHtml(c.severity)}</span></td>
+      <td>${STATUS_ICON[c.status]||""} ${escapeHtml(c.status)}</td>
+      <td>${c.alerts}</td>
+      <td class="c-note">${escapeHtml(c.resolution||"")}</td>
+    </tr>`).join("")}
+    </table>` : "<p style='color:#7d8ba1'>No incidents yet — alerts open a case automatically.</p>";
+}
+
+async function openCases() {
+  const modal = document.getElementById("cases-modal");
+  modal.classList.remove("hidden");
+  document.getElementById("cases-body").innerHTML = "<p style='color:#7d8ba1'>Loading…</p>";
+  try { renderCases(await (await fetch("/api/cases")).json()); }
+  catch (e) { document.getElementById("cases-body").innerHTML = "<p style='color:#7d8ba1'>Case board unavailable.</p>"; }
 }
 
 async function openExposure() {

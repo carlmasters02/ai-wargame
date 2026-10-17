@@ -14,7 +14,7 @@ import random
 from collections import deque
 from datetime import datetime, timezone
 
-from . import attack_map, exposure, generator, intel, queries, scoring, telemetry
+from . import attack_map, cases as cases_mod, exposure, generator, intel, queries, scoring, telemetry
 from .models import ActionSpec, Alert, Credential, GraphSpec, Host, LogEvent, TurnRecord, Vuln
 from .paths import count_viable_paths
 
@@ -70,6 +70,7 @@ class GameEngine:
         self.all_alerts: list[Alert] = []
         self.events: deque[LogEvent] = deque(maxlen=EVENT_WINDOW)  # recent telemetry for BLUE
         self.all_events: list[LogEvent] = []
+        self.casebook = cases_mod.CaseBook()  # SOC incidents (alerts grouped & tracked)
         self.turns: list[TurnRecord] = []
         self.metrics_history: list[dict] = []
         self.impact = 0.0
@@ -741,6 +742,8 @@ class GameEngine:
                           "business_impact": round(self.impact, 1),
                           "alerts_total": len(self.all_alerts)},
                 "hosts": hosts, "alerts": alerts, "recent_log_events": events,
+                "open_cases": [c for c in self.casebook.public()
+                               if c["status"] in ("open", "investigating")][:8],
                 "note": "Alerts are detection-rule hits; recent_log_events is the raw SIEM "
                         "stream (most are benign). ~15% of alerts are FALSE POSITIVES. "
                         "INVESTIGATE before you ISOLATE "
@@ -906,6 +909,7 @@ class GameEngine:
             h = self.hosts[spec.args["host"]]
             was_compromised = h.compromised
             rec.meta["was_compromised"] = was_compromised
+            self.casebook.on_contained(h.id, self.round, "ISOLATE")
             cost = self._isolate_cost(h)
             if h.beacon:
                 rec.meta["confirmed_hosts"] = [h.id]
@@ -938,6 +942,7 @@ class GameEngine:
             cost = self._reimage_cost(h)
             was_compromised = h.compromised
             rec.meta["was_compromised"] = was_compromised
+            self.casebook.on_contained(h.id, self.round, "REIMAGE")
             h.compromised = False
             h.beacon = False
             self.evasion.discard(h.id)
@@ -1005,6 +1010,7 @@ class GameEngine:
             h.verdict = h.compromised
             if h.compromised:
                 rec.meta["confirmed_hosts"] = [h.id]
+            self.casebook.on_investigate(h.id, self.round, h.compromised)
             changed.add(h.id)
             props = {"investigated": True}
             verdict = "COMPROMISED — attacker present!" if h.compromised else "clean"
@@ -1023,6 +1029,7 @@ class GameEngine:
                 h.investigated = True
                 h.investigated_round = self.round
                 h.verdict = h.compromised
+                self.casebook.on_investigate(h.id, self.round, h.compromised)
                 changed.add(h.id)
                 props = {"investigated": True}
                 if h.compromised:
@@ -1049,9 +1056,12 @@ class GameEngine:
                   data_source=data_source)
         self.alerts.append(a)
         self.all_alerts.append(a)
+        crit = self.hosts[host].criticality if host in self.hosts else 5
+        case = self.casebook.on_alert(host, self.round, confidence, crit, true_positive)
         await self.bus.emit("alert", {"host": host, "kind": kind, "source": source,
                                       "signature": signature, "data_source": data_source,
-                                      "confidence": round(confidence, 2)})
+                                      "confidence": round(confidence, 2), "case": case.id})
+        await self.bus.emit("case", {"case": self.casebook.public()[0] if self.casebook.public() else None})
 
     async def _record_event(self, action: str, host: str, alerted: bool = False) -> LogEvent | None:
         """Record the telemetry a RED action generates on a sensor (always, whether or not
@@ -1176,7 +1186,8 @@ class GameEngine:
         await self.bus.emit("game_over", {"winner": winner, "reason": reason,
                                           "rounds": self.round,
                                           "score": self.compute_metrics(),
-                                          "scorecard": self.scorecard()})
+                                          "scorecard": self.scorecard(),
+                                          "cases": self.casebook.public()})
         await self.emit_state()
         if self.reports_enabled:
             await self.bus.emit("report_pending", {
@@ -1193,11 +1204,13 @@ class GameEngine:
 
     def scorecard(self) -> dict:
         """SOC-style scorecard for the match (the model-evaluation metrics)."""
-        return scoring.build(
+        sc = scoring.build(
             self.turns, self.all_alerts, self.metrics_history, self.winner,
             self.win_reason, self.round,
             {h.id: {"criticality": h.criticality, "zone": h.zone}
              for h in self.hosts.values()}).to_dict()
+        sc["cases"] = self.casebook.summary()
+        return sc
 
     def report_context(self) -> dict:
         """Ground-truth facts left unresolved at the end, for data-driven recommendations."""

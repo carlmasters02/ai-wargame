@@ -252,6 +252,10 @@ def create_app() -> FastAPI:
     async def exposure_report():
         return engine.exposure_analysis()
 
+    @app.get("/api/cases")
+    async def cases_report():
+        return {"cases": engine.casebook.public(), "summary": engine.casebook.summary()}
+
     @app.get("/api/state")
     async def state():
         return {"state": engine.state, "round": engine.round, "winner": engine.winner,

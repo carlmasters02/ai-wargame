@@ -103,6 +103,22 @@ class LogEvent(BaseModel):
     benign: bool = False    # engine-only: a normal-activity look-alike (NEVER serialized)
 
 
+class Case(BaseModel):
+    """A SOC incident: alerts on a host grouped into a tracked investigation."""
+    id: str
+    host: str
+    status: str = "open"        # open -> investigating -> contained -> closed
+    severity: str = "low"       # low | medium | high | critical
+    opened_round: int
+    detected_round: int | None = None   # when BLUE first investigated/confirmed
+    contained_round: int | None = None  # when BLUE isolated/reimaged
+    closed_round: int | None = None
+    alerts: int = 0
+    max_confidence: float = 0.0
+    true_positive: bool | None = None   # engine-only: resolved verdict (NEVER serialized live)
+    resolution: str = ""        # short human note
+
+
 class TurnRecord(BaseModel):
     n: int                  # global action counter
     round: int

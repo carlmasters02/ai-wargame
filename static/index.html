@@ -71,6 +71,7 @@
   </select>
   <span id="campaign-score" class="hidden"></span>
   <button id="btn-board" class="ctl" title="Benchmark leaderboard">🏆</button>
+  <button id="btn-cases" class="ctl" title="SOC case board — incidents">📁 <span id="cases-badge">0</span></button>
   <button id="btn-exposure" class="ctl" title="Exposure analysis — top fixes">🎯</button>
   <button id="btn-import" class="ctl" title="Import a real network (CSV / Nmap XML)">⬆ IMPORT</button>
   <input type="file" id="import-file" accept=".csv,.xml,.txt" class="hidden">
@@ -143,6 +144,15 @@
     <h2>🕒 MATCH TIMELINE</h2>
     <div id="timeline-summary"></div>
     <div id="timeline-body"></div>
+  </div>
+</div>
+
+<div id="cases-modal" class="hidden">
+  <div id="cases-card">
+    <button id="cases-close">✕</button>
+    <h2>📁 SOC CASE BOARD</h2>
+    <div id="cases-summary"></div>
+    <div id="cases-body"></div>
   </div>
 </div>
 
