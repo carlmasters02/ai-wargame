@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 
 from .models import ActionSpec
 
@@ -101,24 +102,40 @@ def extract_json(text: str) -> dict:
 
 
 class Agent:
-    def __init__(self, side: str, model: str, settings, persona: str = "apt"):
-        from openai import AsyncOpenAI
+    _clients: dict[str, object] = {}  # base_url -> AsyncOpenAI, shared across agents
 
+    def __init__(self, side: str, model: str, settings, persona: str = "apt"):
         self.side = side
         self.model = model
         self.persona = persona
-        self.client = AsyncOpenAI(base_url=settings.AIAND_BASE_URL,
-                                  api_key=settings.AIAND_API_KEY,
-                                  timeout=20.0, max_retries=0)
+        self.settings = settings
         self.system = build_system(side, persona)
         self.temperature = 0.6 if side == "red" else 0.3
+
+    def _resolve(self) -> tuple[object, str]:
+        """(client, bare_model_name) for the current model, routed to its provider."""
+        from openai import AsyncOpenAI
+
+        base_url, api_key, name = self.settings.resolve_model(self.model)
+        client = Agent._clients.get(base_url)
+        if client is None:
+            client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=20.0, max_retries=0)
+            Agent._clients[base_url] = client
+        return client, name
+
+    @property
+    def client(self):  # back-compat: prewarm and report use agent.client
+        return self._resolve()[0]
 
     def set_persona(self, persona: str):
         self.persona = persona
         self.system = build_system(self.side, persona)
 
     async def choose(self, engine, obs: dict, legal: list[ActionSpec], n_actions: int):
-        """Returns (chosen ActionSpecs, thought, used_fallback)."""
+        """Returns (chosen ActionSpecs, thought, used_fallback, telemetry).
+
+        telemetry = {"latency_ms": int, "tokens": int|None, "model": str} — the
+        model's wall-time and token cost for this decision (for the scorecards)."""
         user_msg = json.dumps({
             "observation": obs,
             "legal_actions": [{"index": a.index, "description": a.description} for a in legal],
@@ -127,32 +144,39 @@ class Agent:
         }, ensure_ascii=False)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 30  # hard per-side budget, then heuristic fallback
+        t0 = loop.time()
         for attempt in range(2):
             remaining = deadline - loop.time()
             if remaining < 3:
                 break
             try:
-                return await asyncio.wait_for(self._call(user_msg, legal, n_actions),
-                                              timeout=remaining)
+                picked, thought, tokens = await asyncio.wait_for(
+                    self._call(user_msg, legal, n_actions), timeout=remaining)
+                tel = {"latency_ms": int((loop.time() - t0) * 1000), "tokens": tokens,
+                       "model": self.model}
+                return picked, thought, False, tel
             except Exception as e:  # noqa: BLE001
                 log.warning("%s agent attempt %d failed: %s", self.side, attempt + 1, e)
         chosen = heuristic_choose(engine, self.side, legal, n_actions)
-        return chosen, "[fallback: LLM unavailable — heuristic policy]", True
+        return chosen, "[fallback: LLM unavailable — heuristic policy]", True, {
+            "latency_ms": int((loop.time() - t0) * 1000), "tokens": None, "model": self.model}
 
     async def _call(self, user_msg: str, legal: list[ActionSpec], n_actions: int):
         from openai import BadRequestError, UnprocessableEntityError
 
+        client, model = self._resolve()  # route to the model's provider, strip the prefix
         try:
-            resp = await self.client.chat.completions.create(
-                model=self.model, temperature=self.temperature, max_tokens=2000,
+            resp = await client.chat.completions.create(
+                model=model, temperature=self.temperature, max_tokens=2000,
                 messages=[{"role": "system", "content": self.system},
                           {"role": "user", "content": user_msg}],
                 response_format={"type": "json_object"})
         except (BadRequestError, UnprocessableEntityError):  # model rejects response_format
-            resp = await self.client.chat.completions.create(
-                model=self.model, temperature=self.temperature, max_tokens=2000,
+            resp = await client.chat.completions.create(
+                model=model, temperature=self.temperature, max_tokens=2000,
                 messages=[{"role": "system", "content": self.system},
                           {"role": "user", "content": user_msg}])
+        tokens = getattr(getattr(resp, "usage", None), "total_tokens", None)
         msg = resp.choices[0].message
         text = msg.content or ""
         if not text.strip():
@@ -178,7 +202,7 @@ class Agent:
                 break
         if not picked:
             raise ValueError(f"no valid action index in {raw!r}")  # triggers a retry
-        return picked, thought, False
+        return picked, thought, tokens
 
 
 # ------------------------------------------------------- heuristic policies

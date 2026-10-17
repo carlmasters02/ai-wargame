@@ -23,6 +23,7 @@ const matchLog = [];            // chronological event log for the timeline moda
 let lastReport = null;          // report payload {markdown, source, model, note}
 let reportPending = null;       // {model} while the report is being written
 let gameOverInfo = null;        // winner payload
+let lastScorecard = null;       // SOC scorecard for the finished match
 
 // ---------------------------------------------------------------- websocket
 let ws = null;
@@ -250,6 +251,7 @@ function loadSnapshot(p) {
   lastReport = null;
   reportPending = null;
   gameOverInfo = null;
+  lastScorecard = null;
   attackState.techniques.clear();
   renderAttackBar();
   clearFeeds();
@@ -451,7 +453,51 @@ function showGameOver(p) {
   txt.innerHTML = `${p.winner === "red" ? "🔴 RED WINS" : "🔵 BLUE WINS"}
     <small>${escapeHtml(p.reason)} — ${p.rounds} rounds</small>`;
   document.getElementById("endgame-dock").classList.remove("hidden");
+  lastScorecard = p.scorecard || null;
   campaignAdvance(p.winner);
+}
+
+function fmt(v, dash = "–") { return v == null ? dash : v; }
+
+function openScorecard() {
+  const modal = document.getElementById("scorecard-modal");
+  const body = document.getElementById("scorecard-body");
+  const sc = lastScorecard;
+  if (!sc) { body.innerHTML = "<p style='color:#7d8ba1'>No scorecard for this match.</p>"; }
+  else {
+    const r = sc.red, b = sc.blue, rc = sc.red_cost, bc = sc.blue_cost;
+    const cost = (c) => c.avg_latency_ms == null
+      ? "<span style='color:#7d8ba1'>heuristic</span>"
+      : `${Math.round(c.avg_latency_ms)} ms · ${c.avg_tokens ? Math.round(c.avg_tokens) + " tok" : "–"} · ${Math.round(c.fallback_rate*100)}% fallback`;
+    body.innerHTML = `
+      <div class="sc-grid">
+        <div class="sc-col red">
+          <div class="sc-head">🔴 RED — attacker &nbsp;<span class="sc-grade g-${r.grade}">${r.grade} · ${r.score}</span></div>
+          <table>
+            <tr><td>Objective (crown jewel)</td><td>${r.objective ? `✔ round ${r.rounds_to_objective}` : "✘ not reached"}</td></tr>
+            <tr><td>Hosts compromised</td><td>${r.hosts_compromised}</td></tr>
+            <tr><td>Stealth (actions/alert)</td><td>${fmt(r.stealth)}</td></tr>
+            <tr><td>Alerts raised</td><td>${r.alerts_raised}</td></tr>
+            <tr><td>Model cost</td><td>${cost(rc)}</td></tr>
+          </table>
+        </div>
+        <div class="sc-col blue">
+          <div class="sc-head">🔵 BLUE — defender &nbsp;<span class="sc-grade g-${b.grade}">${b.grade} · ${b.score}</span></div>
+          <table>
+            <tr><td>Detected / missed</td><td>${b.detected} / ${b.missed}</td></tr>
+            <tr><td>MTTD (rounds)</td><td>${fmt(b.mttd_rounds)}</td></tr>
+            <tr><td>MTTR (rounds)</td><td>${fmt(b.mttr_rounds)}</td></tr>
+            <tr><td>False isolations</td><td>${b.false_isolations}</td></tr>
+            <tr><td>Exposure reduced</td><td>${Math.round(b.exposure_reduction*100)}%</td></tr>
+            <tr><td>Business impact</td><td>${b.business_impact}</td></tr>
+            <tr><td>Model cost</td><td>${cost(bc)}</td></tr>
+          </table>
+        </div>
+      </div>
+      <p class="sc-note">MTTD = mean rounds to detect a compromise; MTTR = rounds from detection to eviction.
+      Scores are 0–100 SOC composites (coverage, speed, precision, exposure control).</p>`;
+  }
+  modal.classList.remove("hidden");
 }
 
 function renderMarkdown(md) {
@@ -699,6 +745,10 @@ function initControls() {
   document.getElementById("banner-close").onclick = () =>
     document.getElementById("banner").classList.add("hidden");
   document.getElementById("banner-report").onclick = openReport;
+  document.getElementById("banner-scorecard").onclick = openScorecard;
+  document.getElementById("dock-scorecard").onclick = openScorecard;
+  document.getElementById("scorecard-close").onclick = () =>
+    document.getElementById("scorecard-modal").classList.add("hidden");
   document.getElementById("banner-timeline").onclick = openTimeline;
   document.getElementById("dock-report").onclick = openReport;
   document.getElementById("dock-timeline").onclick = openTimeline;

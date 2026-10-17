@@ -14,7 +14,7 @@ import random
 from collections import deque
 from datetime import datetime, timezone
 
-from . import attack_map, generator, intel, queries
+from . import attack_map, generator, intel, queries, scoring
 from .models import ActionSpec, Alert, Credential, GraphSpec, Host, TurnRecord, Vuln
 from .paths import count_viable_paths
 
@@ -375,17 +375,19 @@ class GameEngine:
         obs = self.build_observation(side)
         agent = self.agents[side]
         if agent is not None:
-            chosen, thought, fallback = await agent.choose(self, obs, legal, n_actions)
+            chosen, thought, fallback, tel = await agent.choose(self, obs, legal, n_actions)
         else:
             chosen = agent_mod.heuristic_choose(self, side, legal, n_actions)
             thought = "[heuristic policy — no LLM key configured]"
-            fallback = True
+            fallback, tel = True, {"latency_ms": None, "tokens": None, "model": ""}
         await self.bus.emit("agent_thought", {
             "side": side, "text": thought, "fallback": fallback,
             "model": agent.model if agent else "heuristic", "round": self.round})
 
         for spec in chosen:
             rec = await (self._resolve_red(spec) if side == "red" else self._resolve_blue(spec))
+            rec.fallback = fallback
+            rec.latency_ms, rec.tokens, rec.model = tel["latency_ms"], tel["tokens"], tel["model"]
             await self.bus.emit("action_result", {
                 "side": side, "action": rec.action, "args": rec.args, "success": rec.success,
                 "narration": rec.narration, "round": self.round,
@@ -706,6 +708,7 @@ class GameEngine:
                                  f"is a sandbox; BLUE's tripwire fires")
             elif rec.success:
                 changed |= self._compromise(hid)
+                rec.meta["target"] = hid
                 rec.narration = (f"RED exploits {v.cve_label} ({v.name}) on {hid} — shell obtained, "
                                  f"neighbors now visible")
             else:
@@ -729,6 +732,7 @@ class GameEngine:
             rec.success = True
             noise = NOISE["LATERAL_MOVE"]
             changed |= self._compromise(hid)
+            rec.meta["target"] = hid
             rec.narration = (f"RED pivots to {hid} using stolen {c.kind} of "
                              f"{self.users[c.owner].name} — quiet and clean")
 
@@ -748,6 +752,7 @@ class GameEngine:
                 foot = ""
                 if endpoint and not self.hosts[endpoint].compromised:
                     changed |= self._compromise(endpoint)  # the human ran the payload
+                    rec.meta["target"] = endpoint
                     foot = f" and runs a payload on their endpoint {endpoint} (foothold established)"
                 rec.narration = (f"RED's phishing email lands: {u.name} ({u.role}) hands over "
                                  f"{len(got)} credential(s) (grants: {grants}){foot}")
@@ -814,8 +819,10 @@ class GameEngine:
         elif spec.action == "ISOLATE":
             h = self.hosts[spec.args["host"]]
             was_compromised = h.compromised
+            rec.meta["was_compromised"] = was_compromised
             cost = self._isolate_cost(h)
             if h.beacon:
+                rec.meta["confirmed_hosts"] = [h.id]
                 # hidden C2 beacon re-establishes the foothold: isolation breaks, attacker stays
                 h.beacon = False
                 h.verdict = True  # BLUE now knows the attacker is there
@@ -844,6 +851,7 @@ class GameEngine:
             h = self.hosts[spec.args["host"]]
             cost = self._reimage_cost(h)
             was_compromised = h.compromised
+            rec.meta["was_compromised"] = was_compromised
             h.compromised = False
             h.beacon = False
             self.evasion.discard(h.id)
@@ -909,6 +917,8 @@ class GameEngine:
             h.investigated = True
             h.investigated_round = self.round
             h.verdict = h.compromised
+            if h.compromised:
+                rec.meta["confirmed_hosts"] = [h.id]
             changed.add(h.id)
             props = {"investigated": True}
             verdict = "COMPROMISED — attacker present!" if h.compromised else "clean"
@@ -931,6 +941,7 @@ class GameEngine:
                 props = {"investigated": True}
                 if h.compromised:
                     found.append(h.id)
+                    rec.meta.setdefault("confirmed_hosts", []).append(h.id)
                 if h.beacon:
                     h.beacon = False
                     burned += 1
@@ -1045,7 +1056,8 @@ class GameEngine:
         self.state = "game_over"
         await self.bus.emit("game_over", {"winner": winner, "reason": reason,
                                           "rounds": self.round,
-                                          "score": self.compute_metrics()})
+                                          "score": self.compute_metrics(),
+                                          "scorecard": self.scorecard()})
         await self.emit_state()
         if self.reports_enabled:
             await self.bus.emit("report_pending", {
@@ -1053,6 +1065,13 @@ class GameEngine:
             self._report_task = asyncio.get_running_loop().create_task(self._emit_report())
         else:
             self.bus.stop_recording()
+
+    def scorecard(self) -> dict:
+        """SOC-style scorecard for the match (the model-evaluation metrics)."""
+        return scoring.build(
+            self.turns, self.all_alerts, self.metrics_history, self.winner,
+            self.win_reason, self.round,
+            {h.id: h.criticality for h in self.hosts.values()}).to_dict()
 
     def report_context(self) -> dict:
         """Ground-truth facts left unresolved at the end, for data-driven recommendations."""

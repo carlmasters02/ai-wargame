@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # Spectating (the page, /ws, GET endpoints) never needs it.
     WARGAME_TOKEN: str = ""
 
+    # Extra providers for cross-provider benchmarking, as JSON:
+    #   {"openai": {"base_url": "https://api.openai.com/v1", "api_key": "sk-..."}, ...}
+    # A model id "openai:gpt-4o" then routes to that provider; a bare id uses ai& (AIAND_*).
+    MODEL_PROVIDERS: str = "{}"
+
     GAME_SEED: int = 42
     MAX_TURNS: int = 20
     PATH_METRIC_IMPL: str = "python"  # "python" (fast, default) | "cypher" (showcase)
@@ -32,7 +37,27 @@ class Settings(BaseSettings):
 
     @property
     def aiand_enabled(self) -> bool:
-        return bool(self.AIAND_API_KEY)
+        return bool(self.AIAND_API_KEY) or self.providers != {}
+
+    @property
+    def providers(self) -> dict:
+        import json
+        try:
+            p = json.loads(self.MODEL_PROVIDERS)
+            return p if isinstance(p, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+
+    def resolve_model(self, model: str) -> tuple[str, str, str]:
+        """model -> (base_url, api_key, bare_model_name). 'prefix:name' routes to a configured
+        provider; a bare name uses the ai& gateway (AIAND_*)."""
+        if ":" in model:
+            prefix, name = model.split(":", 1)
+            p = self.providers.get(prefix)
+            if p:
+                return (p.get("base_url", self.AIAND_BASE_URL),
+                        p.get("api_key", self.AIAND_API_KEY), name)
+        return (self.AIAND_BASE_URL, self.AIAND_API_KEY, model)
 
 
 settings = Settings()

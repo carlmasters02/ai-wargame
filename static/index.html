@@ -81,6 +81,7 @@
 <div id="banner" class="hidden">
   <div id="banner-text"></div>
   <div id="banner-actions">
+    <button id="banner-scorecard" class="banner-btn">📊 SCORECARD</button>
     <button id="banner-report" class="banner-btn">📋 AFTER-ACTION REPORT</button>
     <button id="banner-timeline" class="banner-btn">🕒 MATCH TIMELINE</button>
     <button id="banner-nav" class="banner-btn">🗺 ATT&amp;CK LAYER</button>
@@ -90,10 +91,19 @@
 </div>
 
 <div id="endgame-dock" class="hidden">
+  <button id="dock-scorecard" class="banner-btn">📊 SCORECARD</button>
   <button id="dock-report" class="banner-btn">📋 REPORT</button>
   <button id="dock-timeline" class="banner-btn">🕒 TIMELINE</button>
   <button id="dock-nav" class="banner-btn">🗺 ATT&amp;CK</button>
   <button id="dock-stix" class="banner-btn">📦 STIX</button>
+</div>
+
+<div id="scorecard-modal" class="hidden">
+  <div id="scorecard-card">
+    <button id="scorecard-close">✕</button>
+    <h2>📊 SOC SCORECARD</h2>
+    <div id="scorecard-body"></div>
+  </div>
 </div>
 
 <div id="report-modal" class="hidden">

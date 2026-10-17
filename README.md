@@ -75,6 +75,7 @@ All settings live in `.env` (copy `.env.example`). Every value is optional.
 | `REPORT_MODEL` | `kimi-k2` | Model that writes the after-action report. |
 | `REPORT_TIMEOUT` | `180` | Seconds per model for the streamed after-action report. |
 | `WARGAME_TOKEN` | *(empty)* | If set, every control endpoint requires it (header `X-Wargame-Token`, or `?token=` in the page URL). Spectating never does. Set this before exposing the server. |
+| `MODEL_PROVIDERS` | `{}` | JSON provider map for cross-provider benchmarking (see §12). A model id `openai:gpt-4o` routes to the named provider; a bare id uses ai&. |
 | `NEO4J_URI` | *(empty)* | Neo4j Aura URI, e.g. `neo4j+s://xxxx.databases.neo4j.io`. |
 | `NEO4J_USER` (or `NEO4J_USERNAME`) | `neo4j` | On Aura this is the **instance ID**, not `neo4j`. |
 | `NEO4J_PASSWORD` | *(empty)* | Neo4j password. |
@@ -415,10 +416,37 @@ rounds, fallback rate). The 🏆 button shows the latest board.
 Options: `-n/--matches`, `--seed-start` (default 1000), `--red`, `--blue`
 (model IDs; omit for heuristic), `--concurrency` (default 4), `--out`.
 
+Every match produces a **SOC scorecard** (the 📊 button, or `game_over.scorecard`):
+
+| Metric | Side | Meaning |
+|---|---|---|
+| **MTTD** | BLUE | mean rounds to detect a compromise |
+| **MTTR** | BLUE | rounds from detection to eviction |
+| **false isolations** | BLUE | hosts cut off / reimaged that RED never held (wasted downtime) |
+| **exposure reduced** | BLUE | fraction of peak attack-paths removed by the end |
+| **detected / missed** | BLUE | compromise coverage |
+| **objective, rounds-to-objective** | RED | did it reach the crown jewel, how fast |
+| **stealth** | RED | successful actions per alert raised |
+| **model cost** | both | avg latency, tokens and fallback rate per decision |
+
+Each side also gets a 0–100 composite **score and grade (A–F)**.
+
+**Cross-provider benchmarking.** Set `MODEL_PROVIDERS` and prefix a model id
+with its provider (`openai:gpt-4o`, `anthropic:claude-...`); a bare id uses ai&.
+RED and BLUE can run on different providers in the same match.
+
+**Tournament mode** plays every model against every other as both RED and BLUE
+and computes a single Elo rating (role advantage averages out):
+
+```bash
+python scripts/benchmark.py --models deepseek-ai/deepseek-v4-pro,moonshotai/kimi-k3,openai:gpt-4o     -n 6 --concurrency 3
+```
+
 **Balance baseline** (heuristic vs heuristic, 100 matches, seeds 2000–2099):
-**RED 13% / BLUE 87%** — a competitive baseline with two realistic entry
-vectors (perimeter exploitation and spearphishing) and a defender that can
-genuinely evict. LLM pairings vary with model quality, which is the point.
+**RED 13% [8–21% 95% CI] / BLUE 87%**, BLUE score 80±2, MTTD 1.2 rounds,
+exposure reduced 97% — a competitive baseline with two realistic entry vectors
+(perimeter exploitation and spearphishing) and a defender that can genuinely
+evict. LLM pairings vary with model quality, which is the point.
 
 ---
 

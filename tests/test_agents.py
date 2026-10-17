@@ -37,7 +37,8 @@ class FakeCompletions:
 def _agent(replies, side="blue"):
     a = Agent.__new__(Agent)
     a.side, a.model, a.persona, a.temperature, a.system = side, "fake-model", "apt", 0.3, "sys"
-    a.client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=FakeCompletions(replies)))
+    fake = types.SimpleNamespace(chat=types.SimpleNamespace(completions=FakeCompletions(replies)))
+    a._resolve = lambda: (fake, "fake-model")  # bypass real client/provider resolution
     return a
 
 
@@ -60,6 +61,26 @@ def test_choose_falls_back_to_heuristic_on_failure(make_engine):
         eng, _ = make_engine(); await eng.reset(6)
         legal = eng.legal_blue()
         agent = _agent([RuntimeError("down"), RuntimeError("still down")])
-        chosen, thought, fallback = await agent.choose(eng, eng.build_observation("blue"), legal, 2)
+        chosen, thought, fallback, tel = await agent.choose(eng, eng.build_observation("blue"), legal, 2)
         assert fallback and chosen and "fallback" in thought
+        assert tel["tokens"] is None and tel["latency_ms"] is not None
     run(go())
+
+
+def test_provider_resolution(monkeypatch):
+    from app.config import Settings
+    monkeypatch.setenv("MODEL_PROVIDERS",
+                       '{"openai": {"base_url": "https://api.openai.com/v1", "api_key": "sk-x"}}')
+    monkeypatch.setenv("AIAND_BASE_URL", "https://gw/v1")
+    monkeypatch.setenv("AIAND_API_KEY", "gw-key")
+    s = Settings()
+    assert s.resolve_model("deepseek/x") == ("https://gw/v1", "gw-key", "deepseek/x")
+    assert s.resolve_model("openai:gpt-4o") == ("https://api.openai.com/v1", "sk-x", "gpt-4o")
+    # unconfigured prefix falls back to the gateway with the id intact
+    assert s.resolve_model("groq:llama")[0] == "https://gw/v1"
+
+
+def test_bad_provider_json_is_ignored(monkeypatch):
+    from app.config import Settings
+    monkeypatch.setenv("MODEL_PROVIDERS", "not json")
+    assert Settings().providers == {}

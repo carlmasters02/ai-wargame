@@ -101,3 +101,7 @@ class TurnRecord(BaseModel):
     fallback: bool = False
     techniques: list[str] = []  # MITRE ATT&CK / mitigation IDs for this action
     ts: str = ""                # UTC ISO-8601 time the action was taken (STIX first/last_seen)
+    latency_ms: int | None = None   # model wall-time for this decision (None = heuristic)
+    tokens: int | None = None       # prompt+completion tokens for this decision
+    model: str = ""                 # model that produced this action ("" = heuristic)
+    meta: dict = {}                 # scoring facts, e.g. {"was_compromised": bool, "target": id}

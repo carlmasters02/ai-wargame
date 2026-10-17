@@ -106,7 +106,8 @@ def create_app() -> FastAPI:
             if engine.winner:
                 await websocket.send_json({"type": "game_over", "payload": {
                     "winner": engine.winner, "reason": engine.win_reason,
-                    "rounds": engine.round, "score": engine.compute_metrics()}})
+                    "rounds": engine.round, "score": engine.compute_metrics(),
+                    "scorecard": engine.scorecard()}})
                 if engine.last_report is not None:
                     await websocket.send_json({"type": "report", "payload": engine.last_report})
             while True:
@@ -185,7 +186,7 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "side + model required"}, status_code=400)
         if engine.agents[side] is None:
             return JSONResponse({"error": "LLM not configured (heuristic mode)"}, status_code=409)
-        if available_models and model not in available_models:
+        if ":" not in model and available_models and model not in available_models:
             return JSONResponse({"error": f"unknown model {model!r}"}, status_code=400)
         await engine.run_command("model_swap", {"side": side, "model": model})  # no graph mutation
         return {"queued": True}
@@ -263,8 +264,9 @@ async def _prewarm():
         if agent is None:
             continue
         try:
-            await agent.client.chat.completions.create(
-                model=agent.model, max_tokens=1,
+            client, model = agent._resolve()
+            await client.chat.completions.create(
+                model=model, max_tokens=1,
                 messages=[{"role": "user", "content": "ping"}])
             log.info("prewarmed %s model %s", side, agent.model)
         except Exception as e:  # noqa: BLE001
