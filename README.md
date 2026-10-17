@@ -45,6 +45,15 @@ cp .env.example .env          # optional: add API keys (see below)
 .venv/bin/uvicorn app.main:app --port 8000
 ```
 
+Or with Docker:
+
+```bash
+docker build -t ai-wargame .
+docker run -p 8000:8000 --env-file .env ai-wargame
+```
+
+Run the tests with `pip install -r requirements-dev.txt && pytest`.
+
 Open **http://localhost:8000** and press **▶ START**.
 
 No keys are needed to try it. Without an AI API key both sides play with
@@ -64,6 +73,8 @@ All settings live in `.env` (copy `.env.example`). Every value is optional.
 | `ATTACKER_MODEL` | `deepseek-chat` | Starting model for RED. |
 | `DEFENDER_MODEL` | `kimi-k2` | Starting model for BLUE. |
 | `REPORT_MODEL` | `kimi-k2` | Model that writes the after-action report. |
+| `REPORT_TIMEOUT` | `180` | Seconds per model for the streamed after-action report. |
+| `WARGAME_TOKEN` | *(empty)* | If set, every control endpoint requires it (header `X-Wargame-Token`, or `?token=` in the page URL). Spectating never does. Set this before exposing the server. |
 | `NEO4J_URI` | *(empty)* | Neo4j Aura URI, e.g. `neo4j+s://xxxx.databases.neo4j.io`. |
 | `NEO4J_USER` (or `NEO4J_USERNAME`) | `neo4j` | On Aura this is the **instance ID**, not `neo4j`. |
 | `NEO4J_PASSWORD` | *(empty)* | Neo4j password. |
@@ -205,7 +216,7 @@ A match is up to `MAX_TURNS` (default 20) **rounds**. Each round, **RED takes
 | Winner | How |
 |---|---|
 | **RED** | Exfiltrates the crown jewel `SKR-DB-PROD`. |
-| **BLUE** | Fully evicts RED (zero compromised hosts after RED had a foothold), **or** survives all `MAX_TURNS` rounds. |
+| **BLUE** | Evicts RED and keeps the attacker out for 3 consecutive rounds (so RED can't just walk back in through an unpatched door), **or** survives all `MAX_TURNS` rounds. |
 
 ### 6.3 RED's actions
 
@@ -217,7 +228,7 @@ RED starts at `INTERNET` and only knows the firewall in front of it.
 | **EXPLOIT** | Attacks a revealed vuln on a reachable host. Success chance = the vuln's exploitability. Success compromises the host and reveals its neighbours (their vulns stay hidden until a SCAN). | per vuln |
 | **HARVEST_CREDS** | Steals every credential stored on an owned host. | 0.40 |
 | **LATERAL_MOVE** | Uses a stolen, unrotated credential to take over the host it grants. **Always succeeds**, quietly. | 0.20 |
-| **PHISH_USER** | Targets an employee whose credentials sit on a discovered host. 45% success on privileged users, 70% on regular ones. Steals all of that user's credentials wherever they're stored. Detection is rolled at the mail gateway. | 0.30 |
+| **PHISH_USER** | Independent initial access: a spearphish reaches any employee by email (no network position needed), 45% success on privileged users / 70% on regular ones. Steals all their credentials and, on success, lands a foothold on the victim's endpoint — so RED can enter the corp zone without breaching the perimeter. Detection rolls at the mail gateway. | 0.30 |
 | **C2_BEACON** | Plants persistence on an owned host: the **next ISOLATE on it fails** (and still costs BLUE the impact) unless BLUE investigates first. | 0.25 |
 | **DEFENSE_EVASION** | Wipes logs on an owned host: detection noise for actions targeting it ×0.4 from now on. | 0.10 |
 | **EXFILTRATE** | Only once the crown jewel is owned. **RED wins.** | 0.80 |
@@ -228,6 +239,7 @@ RED starts at `INTERNET` and only knows the firewall in front of it.
 |---|---|
 | **PATCH** | Permanently fixes a vuln (menu shows the 12 most severe). **Max one PATCH per turn** (change window); a second one fails. |
 | **ISOLATE** | Cuts a flagged host off the network and evicts RED from it. Costs business impact = criticality, ×2 in servers/restricted zones. The perimeter firewall **can't** be isolated (it would take the business offline). |
+| **REIMAGE** | Restores a **confirmed-compromised** host from a known-good backup: evicts the attacker and wipes persistence while the host stays online (cost = criticality). It does **not** fix vulns, so patch the entry point too. This is how BLUE cleans the firewall. |
 | **ROTATE_CREDS** | Invalidates every credential of a user, killing any RED has stolen. |
 | **DEPLOY_HONEYPOT** | Adds a decoy host beside a chosen host (near the crown jewel, an alerted host, the DC or DB-01; max 3 per match). It's reachable from that host **and** from everything upstream of it. Touching it gives BLUE a guaranteed 97%-confidence alert, and RED gets no foothold. |
 | **INVESTIGATE** | Reveals a host's true status right now, and burns any C2 beacon on it. |
@@ -239,6 +251,9 @@ RED starts at `INTERNET` and only knows the firewall in front of it.
   neighbours; their vulnerabilities stay hidden until a SCAN.
 - **BLUE** sees the full topology and every unpatched vuln, but **never** sees
   which hosts are compromised. It works from the alert queue and investigations.
+  Its exposure score is an **estimate** — attack paths from the internet and
+  *confirmed* footholds, assuming any unrotated credential may already be stolen
+  — so it never silently reacts to a RED action that raised no alert.
 - **Investigations are snapshots.** A host found clean can be compromised a
   round later. A verdict goes stale after 3 rounds, or as soon as a newer alert
   hits that host; then BLUE may investigate again.
@@ -368,11 +383,13 @@ mid-match):
 
 ## 11. Endgame: report and timeline
 
-- **📋 After-action report**: written by `REPORT_MODEL` from the full turn log:
-  outcome, timeline, ATT&CK mapping table, turning points (where the path count
-  shifted) and three recommendations for BLUE. It opens automatically a couple
-  of seconds after the match ends. Without an API key (or if the model fails) a
-  deterministic summary report is used instead.
+- **📋 After-action report**: streamed from `REPORT_MODEL` (falling back to the
+  attacker model, then a deterministic template) from the full turn log:
+  outcome, timeline, ATT&CK mapping table, turning points and recommendations
+  grounded in what was left unresolved (stolen-but-unrotated creds, exploited-
+  but-unpatched vulns, un-investigated alerts). The report header always says
+  whether a model or the template wrote it. It opens a couple of seconds after
+  the match ends.
 - **🕒 Match timeline**: every action, alert and judge intervention in order,
   with match stats (actions per side, alerts, interventions).
 
@@ -398,8 +415,10 @@ rounds, fallback rate). The 🏆 button shows the latest board.
 Options: `-n/--matches`, `--seed-start` (default 1000), `--red`, `--blue`
 (model IDs; omit for heuristic), `--concurrency` (default 4), `--out`.
 
-**Balance baseline** (heuristic vs heuristic, 40 matches, seeds 2000–2039):
-**RED 15% / BLUE 85%**.
+**Balance baseline** (heuristic vs heuristic, 100 matches, seeds 2000–2099):
+**RED 13% / BLUE 87%** — a competitive baseline with two realistic entry
+vectors (perimeter exploitation and spearphishing) and a defender that can
+genuinely evict. LLM pairings vary with model quality, which is the point.
 
 ---
 
@@ -457,6 +476,9 @@ Aura browser during a match.
 | POST | `/api/intervene/insider` | | Judge: insider threat. |
 | POST | `/api/model` | `{"side": "red", "model": "…"}` | Swap a side's model. |
 | POST | `/api/persona` | `{"persona": "apt"\|"ransomware"\|"ghost"}` | Change RED's persona. |
+
+All `POST` endpoints require the `X-Wargame-Token` header when `WARGAME_TOKEN`
+is set; `GET` endpoints and `/ws` never do.
 | GET | `/api/models` | | Available and current models. |
 | GET | `/api/state` | | State, round, winner, metrics, intel status. |
 | GET | `/api/export/navigator` | | ATT&CK Navigator layer. |
@@ -497,6 +519,24 @@ The server pushes `{"type": …, "payload": …}` events:
 | `scripts/benchmark.py` | Headless leaderboard; see [§12](#12-campaign-mode-and-benchmarks). |
 
 ---
+
+## 16a. Development & tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest                         # 47 unit + integration tests (engine, fog of war, exports, API)
+python scripts/smoke_test.py   # headless games + determinism + fog-of-war leak check
+```
+
+CI (`.github/workflows/ci.yml`) runs the tests, smoke games, the generator
+guarantee and a benchmark on every push across Python 3.11–3.13. Runtime
+dependencies are pinned in `requirements.txt`; test-only ones in
+`requirements-dev.txt`.
+
+The test suite enforces the invariants that matter for credibility — RED never
+sees undiscovered hosts, BLUE never sees compromise truth or reacts to silent
+actions, false positives are indistinguishable from real alerts, STIX exports
+reference MITRE's canonical object ids, and the control token gates mutations.
 
 ## 17. Project layout
 

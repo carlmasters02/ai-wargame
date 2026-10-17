@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,7 +26,7 @@ from app.db import Mirror  # noqa: E402
 from app.engine import GameEngine  # noqa: E402
 from app.events import Broadcaster  # noqa: E402
 
-REPLAY_DIR = "/tmp/opencode/bench_replays"
+REPLAY_DIR = os.path.join(tempfile.gettempdir(), "ai_wargame", "bench_replays")
 
 
 async def play(seed: int, red_model: str | None, blue_model: str | None,
@@ -45,6 +46,7 @@ async def play(seed: int, red_model: str | None, blue_model: str | None,
     while engine.state in ("running", "paused") and not engine.winner:
         await asyncio.sleep(0.02)
         if time.time() - t0 > timeout:
+            await engine.stop()  # don't leave a zombie game loop running
             return {"seed": seed, "winner": "timeout", "rounds": engine.round}
     m = engine.compute_metrics()
     return {

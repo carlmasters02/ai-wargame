@@ -5,6 +5,7 @@ Usage: .venv/bin/python scripts/find_seed.py [n_seeds]
 import asyncio
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -15,7 +16,8 @@ from app.events import Broadcaster
 
 
 async def play(seed: int):
-    engine = GameEngine(settings, Broadcaster(record_dir="/tmp/opencode/find_seed"), Mirror(False))
+    replay_dir = os.path.join(tempfile.gettempdir(), "ai_wargame", "find_seed")
+    engine = GameEngine(settings, Broadcaster(record_dir=replay_dir), Mirror(False))
     engine.turn_delay = 0.0
     await engine.reset(seed)
     await engine.start()

@@ -22,7 +22,7 @@ def main() -> int:
         try:
             from neo4j import GraphDatabase
 
-            d = GraphDatabase.driver(uri, auth=(os.getenv("NEO4J_USER", "neo4j"), pw))
+            d = GraphDatabase.driver(uri, auth=(os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME") or "neo4j", pw))
             d.verify_connectivity()
             print(f"[neo4j] CONNECTED  {uri}")
             d.close()

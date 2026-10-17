@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,7 +18,7 @@ from app.events import Broadcaster
 
 
 async def play(seed: int, quiet: bool = True) -> dict:
-    bus = Broadcaster(record_dir="/tmp/opencode/replays_test")
+    bus = Broadcaster(record_dir=os.path.join(tempfile.gettempdir(), "ai_wargame", "replays_test"))
     engine = GameEngine(settings, bus, Mirror(enabled=False))
     engine.turn_delay = 0.0
     t0 = time.time()

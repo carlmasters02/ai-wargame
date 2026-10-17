@@ -59,7 +59,9 @@ BLUE_SYSTEM = """You are BLUE, SOC lead defending Sakura Logistics K.K. An APT i
 Rules:
 - You receive the full topology, unpatched vulns, your recent alert queue (with confidence), and a numbered legal-action list. You have 2 action points: return TWO different indices.
 - You CANNOT see the attacker. ~15% of alerts are false positives. INVESTIGATE a host to learn the truth before isolating anything critical.
-- ISOLATE evicts the attacker but costs business impact = criticality (x2 for servers/restricted zones). Never casually isolate the CrownJewel or domain controllers. The perimeter firewall CANNOT be isolated (company policy — it would take the business offline); defend it with PATCH + INVESTIGATE.
+- ISOLATE evicts the attacker but costs business impact = criticality (x2 for servers/restricted zones) and cuts the host off permanently. Never casually isolate the CrownJewel or domain controllers. The perimeter firewall CANNOT be isolated (company policy — it would take the business offline).
+- REIMAGE restores a CONFIRMED-compromised host from a known-good backup: evicts the attacker and wipes persistence while the host stays online (impact = criticality). It does not fix vulns — PATCH the entry point too or the attacker can come straight back. REIMAGE is how you clean the firewall.
+- Your score shows an ESTIMATED exposure (paths to the CrownJewel assuming any unrotated credential may be stolen). Rotating credentials and patching lower it; you never see the attacker's true position.
 - PATCH kills a vuln forever, but change windows are limited: MAX ONE PATCH PER TURN (a second patch in the same turn fails). Spend your other action point on INVESTIGATE, ISOLATE, ROTATE_CREDS or DEPLOY_HONEYPOT.
 - ROTATE_CREDS invalidates stolen credentials — rotate privileged users when alerts point near their assets.
 - DEPLOY_HONEYPOT near the CrownJewel or DC gives a guaranteed high-confidence alert when touched.
@@ -166,14 +168,16 @@ class Agent:
         by_index = {a.index: a for a in legal}
         picked: list[ActionSpec] = []
         for r in raw:
-            r = max(0, min(int(r), len(legal) - 1))  # clamp (repair)
-            a = by_index.get(r)
-            if a and a not in picked:
+            try:
+                a = by_index.get(int(r))
+            except (TypeError, ValueError):
+                a = None
+            if a and a not in picked:  # out-of-range / duplicate indices are ignored, not guessed
                 picked.append(a)
             if len(picked) == n_actions:
                 break
         if not picked:
-            raise ValueError("no valid action index")
+            raise ValueError(f"no valid action index in {raw!r}")  # triggers a retry
         return picked, thought, False
 
 
@@ -207,9 +211,14 @@ def _heuristic_red(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
             v = engine.vulns[a.args["vuln"]]
             return (_zone(engine, a.args["host"]), v.exploitability, -v.noise)
         return [max(exp, key=k)]
-    # phish privileged users when no exploit is on the table
+    # phishing: a realistic second entry. Early (few footholds) prefer a phish that lands a
+    # NEW endpoint foothold; otherwise occasionally phish a privileged user for their creds.
+    footholds = len(engine._controlled(include_internet=False))
+    endpoint_phish = [a for a in legal if a.action == "PHISH_USER" and "foothold" in a.description]
+    if endpoint_phish and footholds < 2 and engine.rng.random() < 0.7:
+        return [endpoint_phish[0]]
     phish = [a for a in legal if a.action == "PHISH_USER" and "PRIVILEGED" in a.description]
-    if phish and engine.rng.random() < 0.6:
+    if phish and engine.rng.random() < 0.5:
         return [phish[0]]
     scans = [a for a in legal if a.action == "SCAN"]
     if scans:
@@ -240,9 +249,10 @@ def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
     # 1. confirmed compromised -> isolate (cheap hosts) or patch (critical hosts)
     for h in engine.hosts.values():
         if h.verdict and not h.isolated:
-            if h.criticality < 9:
+            if h.criticality < 9 and h.kind != "firewall":
                 add(next((a for a in legal if a.action == "ISOLATE" and a.args["host"] == h.id), None))
-            else:
+            else:  # too critical to cut off: clean it, then close the door
+                add(next((a for a in legal if a.action == "REIMAGE" and a.args["host"] == h.id), None))
                 add(max((a for a in legal if a.action == "PATCH" and a.args["host"] == h.id),
                         key=lambda a: engine.vulns[a.args["vuln"]].severity, default=None))
     # 2. investigate highest-confidence alerted host

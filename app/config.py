@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     ATTACKER_MODEL: str = "deepseek-chat"
     DEFENDER_MODEL: str = "kimi-k2"
     REPORT_MODEL: str = "kimi-k2"
+    REPORT_TIMEOUT: float = 180.0  # seconds per model for the streamed after-action report
+
+    # optional shared secret for every state-changing endpoint (empty = open, for local use).
+    # Spectating (the page, /ws, GET endpoints) never needs it.
+    WARGAME_TOKEN: str = ""
 
     GAME_SEED: int = 42
     MAX_TURNS: int = 20

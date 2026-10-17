@@ -1,0 +1,5 @@
+# Test / tooling dependencies (CI installs both files).
+-r requirements.txt
+pytest==8.4.2
+httpx==0.28.1
+stix2==3.0.1

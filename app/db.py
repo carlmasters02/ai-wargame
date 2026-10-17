@@ -46,15 +46,33 @@ class Mirror:
 
     def __init__(self, enabled: bool):
         self.enabled = enabled
+        self._pending: set[asyncio.Task] = set()  # strong refs: tasks can't be GC'd mid-write
 
     def write(self, cypher: str, **params) -> None:
         if not self.enabled:
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._write_async(cypher, params))
         except RuntimeError:
-            pass
+            return
+        task = loop.create_task(self._write_async(cypher, params))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def flush(self) -> None:
+        """Wait for every queued write (call before WIPE so stale writes can't land after it)."""
+        while self._pending:
+            await asyncio.gather(*list(self._pending), return_exceptions=True)
+
+    async def write_now(self, cypher: str, **params) -> list[dict]:
+        """Awaited write on a worker thread — ordered, but never blocks the event loop."""
+        if not self.enabled:
+            return []
+        try:
+            return await asyncio.to_thread(run_sync, cypher, **params)
+        except Exception as e:  # noqa: BLE001
+            log.warning("mirror write failed: %s", e)
+            return []
 
     async def _write_async(self, cypher: str, params: dict) -> None:
         try:
@@ -62,11 +80,3 @@ class Mirror:
         except Exception as e:  # noqa: BLE001
             log.warning("mirror write failed: %s", e)
 
-    def write_blocking(self, cypher: str, **params) -> list[dict]:
-        if not self.enabled:
-            return []
-        try:
-            return run_sync(cypher, **params)
-        except Exception as e:  # noqa: BLE001
-            log.warning("mirror blocking write failed: %s", e)
-            return []

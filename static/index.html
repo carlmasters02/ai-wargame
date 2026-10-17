@@ -8,6 +8,7 @@
 <script src="/static/vendor/force-graph.min.js"></script>
 <script src="/static/vendor/chart.umd.min.js"></script>
 <script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
 </head>
 <body>
 
@@ -37,6 +38,7 @@
     <div id="view-toggle">
       <button id="view-god" class="toggle active">🌐 GOD VIEW</button>
       <button id="view-red" class="toggle">🥷 RED VIEW</button>
+      <button id="view-fit" class="toggle" title="Fit the whole network in view">⤢ FIT</button>
     </div>
   </section>
 
@@ -98,6 +100,7 @@
   <div id="report-card">
     <button id="report-close">✕</button>
     <h2>📋 AFTER-ACTION REPORT</h2>
+    <div id="report-source" class="report-source"></div>
     <div id="report-body"></div>
   </div>
 </div>

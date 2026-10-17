@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install
+        run: pip install -r requirements-dev.txt
+      - name: Unit + integration tests
+        run: python -m pytest -q
+      - name: Headless smoke games (determinism + fog-of-war checks)
+        run: python scripts/smoke_test.py 1 2 3
+      - name: Network generator guarantee
+        run: python scripts/gen_test.py
+      - name: Benchmark harness runs
+        run: python scripts/benchmark.py -n 10 --out /tmp/leaderboard

@@ -12,6 +12,7 @@ import json
 import logging
 import random
 from collections import deque
+from datetime import datetime, timezone
 
 from . import attack_map, generator, intel, queries
 from .models import ActionSpec, Alert, Credential, GraphSpec, Host, TurnRecord, Vuln
@@ -27,6 +28,7 @@ EVASION_FACTOR = 0.4  # DEFENSE_EVASION multiplies future detection noise on tha
 FALSE_POSITIVE_RATE = 0.15
 MAX_HONEYPOTS = 3
 ALERT_WINDOW = 8
+EVICTION_HOLD = 3  # BLUE turns in a row with zero RED footholds before eviction is a win
 STALE_INVESTIGATION = 3  # rounds until an INVESTIGATE verdict goes stale and may be re-run
 FP_KINDS = ("scan", "exploit", "lateral_move", "harvest_creds", "c2_beacon")  # FPs look like real alerts
 
@@ -72,9 +74,10 @@ class GameEngine:
         self._patch_used_this_turn = False
         self.evasion: set[str] = set()  # hosts where RED wiped logs (detection noise reduced)
         self._next_side = "red"
+        self._clean_turns = 0  # consecutive BLUE turns ending with RED holding nothing
         self._step = False
         self._zd_count = 0
-        self.last_report: str | None = None
+        self.last_report: dict | None = None
         self.rng = random.Random(0)
 
     def load_spec(self, spec: GraphSpec):
@@ -121,22 +124,23 @@ class GameEngine:
         self.load_spec(spec)
         if self.mirror.enabled:
             m = self.mirror
-            m.write_blocking(queries.WIPE)
-            m.write_blocking(queries.WRITE_HOSTS,
-                             rows=[{"id": h.id, "props": h.model_dump()} for h in spec.hosts])
-            m.write_blocking(queries.SET_CROWN_JEWEL, id=spec.crown_jewel)
-            m.write_blocking(queries.WRITE_EDGES, rows=[e.model_dump() for e in spec.edges])
-            m.write_blocking(queries.WRITE_VULNS,
-                             rows=[{"host": v.host, "id": v.id,
-                                    "props": v.model_dump(exclude={"host", "id"})} for v in spec.vulns])
-            m.write_blocking(queries.WRITE_USERS,
-                             rows=[{"id": u.id, "props": u.model_dump(exclude={"id"})} for u in spec.users])
-            m.write_blocking(queries.WRITE_CREDS,
-                             rows=[c.model_dump() | {"props": c.model_dump(
-                                 exclude={"id", "stored_on", "grants", "owner"})} for c in spec.creds])
-            m.write_blocking(queries.WRITE_ADMIN_OF,
-                             rows=[{"u": u, "h": h} for u, h in generator.ADMIN_OF])
-        self.bus.start_recording(tag=f"seed{used_seed}")
+            await m.flush()  # in-flight writes from the old match must land BEFORE the wipe
+            await m.write_now(queries.WIPE)
+            await m.write_now(queries.WRITE_HOSTS,
+                              rows=[{"id": h.id, "props": h.model_dump()} for h in spec.hosts])
+            await m.write_now(queries.SET_CROWN_JEWEL, id=spec.crown_jewel)
+            await m.write_now(queries.WRITE_EDGES, rows=[e.model_dump() for e in spec.edges])
+            await m.write_now(queries.WRITE_VULNS,
+                              rows=[{"host": v.host, "id": v.id,
+                                     "props": v.model_dump(exclude={"host", "id"})} for v in spec.vulns])
+            await m.write_now(queries.WRITE_USERS,
+                              rows=[{"id": u.id, "props": u.model_dump(exclude={"id"})} for u in spec.users])
+            await m.write_now(queries.WRITE_CREDS,
+                              rows=[c.model_dump() | {"props": c.model_dump(
+                                  exclude={"id", "stored_on", "grants", "owner"})} for c in spec.creds])
+            await m.write_now(queries.WRITE_ADMIN_OF,
+                              rows=[{"u": u, "h": h} for u, h in generator.ADMIN_OF])
+        self.bus.stop_recording()  # recording starts with the match (START), not on every reset
         await self._emit_snapshot()
         await self._emit_metrics()
         await self.emit_state()
@@ -198,6 +202,18 @@ class GameEngine:
             "round": self.round, "max_rounds": self.s.MAX_TURNS,
         }
 
+    def defender_exposure(self) -> tuple[int, bool]:
+        """Attack paths as BLUE can estimate them, without ground truth: only CONFIRMED
+        footholds count as attacker positions, and every unrotated credential is assumed
+        possibly stolen (worst case). Never reacts to silent RED actions."""
+        hosts = [h.model_copy(update={"compromised": h.kind == "internet"
+                                      or (bool(h.verdict) and not h.isolated)})
+                 for h in self.hosts.values()]
+        creds = [c.model_copy(update={"stolen": not c.rotated}) for c in self.creds.values()]
+        paths, _, capped = count_viable_paths(hosts, self.edges, list(self.vulns.values()),
+                                              creds, self.cj, maxlen=8, cap=250)
+        return paths, capped
+
     async def _emit_metrics(self):
         m = self.compute_metrics()
         self.metrics_history.append({"round": m["round"], "paths": m["paths"],
@@ -212,6 +228,10 @@ class GameEngine:
                                               "rounds": self.round,
                                               "score": self.compute_metrics()})
             return
+        if self.action_n == 0 and not self.bus.recording and self.spec:
+            self.bus.start_recording(tag=f"seed{self.spec.seed}")
+            self.bus.record("graph_snapshot", self.snapshot())  # replay starts from this state
+            self.bus.record("metrics", self.compute_metrics())
         self.state = "running"
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
@@ -387,8 +407,9 @@ class GameEngine:
 
     def _new_record(self, side, action, args) -> TurnRecord:
         self.action_n += 1
+        ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         return TurnRecord(n=self.action_n, round=self.round, side=side,
-                          action=action, args=args, success=False,
+                          action=action, args=args, success=False, ts=ts,
                           techniques=[t["id"] for t in attack_map.techniques_for(action)])
 
     # ------------------------------------------------------- legal actions
@@ -435,19 +456,20 @@ class GameEngine:
                     action="SCAN", args={"host": h.id},
                     description=f"SCAN from {h.id} — fingerprint vulns on ALL known hosts "
                                 f"(new: {', '.join(sorted(unrevealed))}) (low noise)"))
-        # PHISH_USER: target users whose creds sit on a discovered host
+        # PHISH_USER: email reaches any employee regardless of network position (initial access)
         for u in self.users.values():
             pending = [c for c in self.creds.values()
-                       if c.owner == u.id and not c.stolen and not c.rotated
-                       and self.hosts[c.stored_on].discovered]
+                       if c.owner == u.id and not c.stolen and not c.rotated]
             if pending:
                 chance = 0.45 if u.privileged else 0.7
+                endpoint = self._phish_endpoint(u.id)
+                foothold = (f"; lands a foothold on their endpoint {endpoint}"
+                            if endpoint and not self.hosts[endpoint].compromised else "")
                 acts.append(ActionSpec(
                     action="PHISH_USER", args={"user": u.id},
                     description=f"PHISH_USER {u.name} ({u.role}{' PRIVILEGED' if u.privileged else ''}) "
-                                f"— targeted phishing, ~{chance:.0%} success, steals {len(pending)} "
-                                f"cred(s) wherever stored (grants: "
-                                f"{', '.join(sorted({c.grants for c in pending}))})"))
+                                f"— spearphishing email, ~{chance:.0%} success, steals "
+                                f"{len(pending)} cred(s){foothold} (detection rolls on the mail gateway)"))
         # C2_BEACON: persistence on an owned host (survives one ISOLATE unless investigated)
         for h in self._controlled(include_internet=False):
             if not h.beacon:
@@ -468,16 +490,29 @@ class GameEngine:
 
     def legal_blue(self) -> list[ActionSpec]:
         acts: list[ActionSpec] = []
-        # PATCH: top 12 unpatched by severity
-        unpatched = sorted((v for v in self.vulns.values() if not v.patched),
-                           key=lambda v: -v.severity)[:12]
-        for v in unpatched:
-            acts.append(ActionSpec(
-                action="PATCH", args={"vuln": v.id, "host": v.host},
-                description=f"PATCH {v.cve_label} on {v.host} (sev {v.severity}, {v.name}){intel.tag(v)}"))
-        # ISOLATE: alerted or confirmed-compromised hosts
         flagged = {a.host for a in self.alerts}
         flagged |= {h.id for h in self.hosts.values() if h.verdict}
+        # PATCH: vulns on alerted/confirmed hosts first (always listed), then by severity
+        open_v = [v for v in self.vulns.values()
+                  if not v.patched and not self.hosts[v.host].isolated]
+        urgent = sorted((v for v in open_v if v.host in flagged), key=lambda v: -v.severity)
+        rest = sorted((v for v in open_v if v.host not in flagged), key=lambda v: -v.severity)
+        for v in (urgent + rest)[:max(12, len(urgent))]:
+            hot = " [HOST FLAGGED]" if v.host in flagged else ""
+            acts.append(ActionSpec(
+                action="PATCH", args={"vuln": v.id, "host": v.host},
+                description=f"PATCH {v.cve_label} on {v.host} (sev {v.severity}, {v.name})"
+                            f"{intel.tag(v)}{hot}"))
+        # REIMAGE: confirmed-compromised hosts (including the firewall) — evicts without isolating
+        for h in sorted(self.hosts.values(), key=lambda h: h.id):
+            if h.verdict and not h.isolated and h.kind != "internet" and not h.honeypot:
+                acts.append(ActionSpec(
+                    action="REIMAGE", args={"host": h.id},
+                    description=f"REIMAGE {h.id} ({h.kind}/{h.zone}) from a known-good backup — "
+                                f"evicts the attacker and any persistence, host stays connected; "
+                                f"does NOT fix its vulns (patch too). Business impact "
+                                f"+{self._reimage_cost(h)}"))
+        # ISOLATE: alerted or confirmed-compromised hosts
         for hid in sorted(flagged):
             h = self.hosts[hid]
             if h.isolated or h.kind in ("internet", "firewall") or h.honeypot:
@@ -542,8 +577,21 @@ class GameEngine:
         return [h for h in self.hosts.values() if h.zone == zone and h.kind != "internet"
                 and not h.honeypot and not self._recently_investigated(h)]
 
+    def _phish_endpoint(self, uid: str) -> str | None:
+        """A human-operated endpoint (corp/dmz workstation or appserver) that stores this
+        user's creds — what a spearphish actually lands on. None for server-only admins."""
+        for c in self.creds.values():
+            if c.owner == uid and not c.rotated:
+                h = self.hosts.get(c.stored_on)
+                if h and h.kind in ("workstation", "appserver") and h.zone in ("corp", "dmz"):
+                    return h.id
+        return None
+
     def _isolate_cost(self, h: Host) -> int:
         return h.criticality * (2 if h.zone in ("servers", "restricted") else 1)
+
+    def _reimage_cost(self, h: Host) -> int:
+        return h.criticality  # one maintenance window of downtime, cheaper than a permanent cut-off
 
     # -------------------------------------------------------- observations
     def build_observation(self, side: str) -> dict:
@@ -575,7 +623,8 @@ class GameEngine:
                   for c in self.creds.values() if c.stolen]
         return {"side": "red", "round": self.round,
                 "turns_remaining": self.s.MAX_TURNS - self.round + 1,
-                "score": self.compute_metrics(),
+                "score": {"hosts_owned": len(self._controlled(include_internet=False)),
+                          "credentials_stolen": len(stolen)},
                 "hosts": hosts, "stolen_creds": stolen,
                 "hint": "EXPLOIT needs a revealed vuln (SCAN first). "
                         "LATERAL_MOVE needs a stolen unrotated credential."}
@@ -601,12 +650,15 @@ class GameEngine:
         return {"side": "blue", "round": self.round,
                 "turns_remaining": self.s.MAX_TURNS - self.round + 1,
                 "crown_jewel": self.cj,
-                "score": {"paths_to_crown_jewel": self.compute_metrics()["paths"],
+                "score": {"estimated_exposure_paths": self.defender_exposure()[0],
+                          "exposure_note": "paths to the crown jewel from the internet and "
+                                           "CONFIRMED footholds, assuming any unrotated "
+                                           "credential may be stolen",
                           "business_impact": round(self.impact, 1),
                           "alerts_total": len(self.all_alerts)},
                 "hosts": hosts, "alerts": alerts,
                 "note": "~15% of alerts are FALSE POSITIVES. INVESTIGATE before you ISOLATE "
-                        "critical hosts. You have 2 action points this turn."}
+                        "or REIMAGE critical hosts. You have 2 action points this turn."}
 
     # ---------------------------------------------------------- resolution
     def _compromise(self, hid: str) -> set[str]:
@@ -692,8 +744,13 @@ class GameEngine:
                     c.stolen = True
                     self.mirror.write(queries.SET_CRED, id=c.id, props={"stolen": True})
                 grants = ", ".join(sorted({c.grants for c in got}))
+                endpoint = self._phish_endpoint(u.id)
+                foot = ""
+                if endpoint and not self.hosts[endpoint].compromised:
+                    changed |= self._compromise(endpoint)  # the human ran the payload
+                    foot = f" and runs a payload on their endpoint {endpoint} (foothold established)"
                 rec.narration = (f"RED's phishing email lands: {u.name} ({u.role}) hands over "
-                                 f"{len(got)} credential(s) (grants: {grants})")
+                                 f"{len(got)} credential(s) (grants: {grants}){foot}")
             else:
                 rec.narration = (f"RED phishes {u.name} ({u.role}) — they report the email "
                                  f"to IT instead. No creds.")
@@ -782,6 +839,22 @@ class GameEngine:
                                   props={"isolated": True, "compromised": False})
                 rec.narration = (f"BLUE isolates {h.id} (impact +{cost})"
                                  + (" — attacker EVICTED from the host" if was_compromised else ""))
+
+        elif spec.action == "REIMAGE":
+            h = self.hosts[spec.args["host"]]
+            cost = self._reimage_cost(h)
+            was_compromised = h.compromised
+            h.compromised = False
+            h.beacon = False
+            self.evasion.discard(h.id)
+            h.investigated, h.investigated_round, h.verdict = True, self.round, False
+            self.impact += cost
+            changed.add(h.id)
+            self.mirror.write(queries.SET_HOST, id=h.id,
+                              props={"compromised": False, "beacon": False, "investigated": True})
+            rec.narration = (f"BLUE reimages {h.id} from a known-good backup (impact +{cost})"
+                             + (" — attacker EVICTED, persistence wiped" if was_compromised
+                                else " — host was already clean"))
 
         elif spec.action == "ROTATE_CREDS":
             u = self.users[spec.args["user"]]
@@ -949,8 +1022,20 @@ class GameEngine:
 
     # ------------------------------------------------------------ game over
     async def _check_eviction(self):
-        if self.ever_compromised and not self._controlled(include_internet=False):
-            await self._game_over("blue", "RED fully evicted — zero hosts under attacker control")
+        """Eviction only counts once it HOLDS: RED gets EVICTION_HOLD-1 chances to get back in
+        (e.g. through an entry point BLUE never patched) before the incident is closed."""
+        if not self.ever_compromised or self._controlled(include_internet=False):
+            self._clean_turns = 0
+            return
+        self._clean_turns += 1
+        if self._clean_turns >= EVICTION_HOLD:
+            await self._game_over("blue", f"RED evicted and locked out for {EVICTION_HOLD} "
+                                          f"rounds — incident closed")
+        elif self._clean_turns == 1:
+            await self.bus.emit("intervention", {
+                "kind": "eviction_watch",
+                "narration": f"🧹 RED holds no hosts — BLUE wins if it keeps RED out for "
+                             f"{EVICTION_HOLD - 1} more round(s)"})
 
     async def _game_over(self, winner: str, reason: str):
         if self.winner:
@@ -963,18 +1048,43 @@ class GameEngine:
                                           "score": self.compute_metrics()})
         await self.emit_state()
         if self.reports_enabled:
+            await self.bus.emit("report_pending", {
+                "model": self.s.REPORT_MODEL if self.s.aiand_enabled else None})
             self._report_task = asyncio.get_running_loop().create_task(self._emit_report())
         else:
             self.bus.stop_recording()
 
+    def report_context(self) -> dict:
+        """Ground-truth facts left unresolved at the end, for data-driven recommendations."""
+        exploited = {}
+        for t in self.turns:
+            if t.side == "red" and t.action == "EXPLOIT" and t.success:
+                v = self.vulns.get(t.args.get("vuln", ""))
+                if v and not v.patched:
+                    exploited.setdefault(v.id, {"cve": v.cve_label, "host": v.host, "round": t.round})
+        investigated = {t.args.get("host") for t in self.turns
+                        if t.side == "blue" and t.action in ("INVESTIGATE", "REIMAGE")}
+        hot = sorted({a.host for a in self.all_alerts
+                      if a.true_positive and a.confidence >= 0.6 and a.host in self.hosts
+                      and self.hosts[a.host].kind != "internet" and a.host not in investigated})
+        return {
+            "stolen_unrotated": [{"owner": self.users[c.owner].name, "kind": c.kind, "grants": c.grants}
+                                 for c in self.creds.values() if c.stolen and not c.rotated],
+            "exploited_unpatched": list(exploited.values()),
+            "uninvestigated_alerts": hot,
+            "failed_isolations": sum(1 for t in self.turns
+                                     if t.action == "ISOLATE" and "beacon" in t.narration),
+        }
+
     async def _emit_report(self):
         from .report import generate_report
         try:
-            md = await generate_report(self.s, self.turns, self.metrics_history,
-                                       self.winner, self.win_reason)
+            payload = await generate_report(self.s, self.turns, self.metrics_history,
+                                            self.winner, self.win_reason, self.report_context())
         except Exception:  # noqa: BLE001
             log.exception("report failed")
-            md = ""
-        self.last_report = md
-        await self.bus.emit("report", {"markdown": md})
+            payload = {"markdown": "", "source": "template", "model": None,
+                       "note": "report generation crashed — see server log"}
+        self.last_report = payload
+        await self.bus.emit("report", payload)
         self.bus.stop_recording()

@@ -6,6 +6,7 @@ same WS contract, so a recorded match is a perfect offline fallback.
 """
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -13,13 +14,19 @@ import time
 
 log = logging.getLogger("events")
 
+KEEP_RECORDINGS = 50  # newest match_*.jsonl files kept; older ones are pruned
 
 class Broadcaster:
-    def __init__(self, record_dir: str = "replays"):
+    def __init__(self, record_dir: str = "replays", keep: int = KEEP_RECORDINGS):
         self.clients: set = set()
         self.record_dir = record_dir
+        self.keep = keep
         self._fh = None
         self._t0 = None
+
+    @property
+    def recording(self) -> bool:
+        return self._fh is not None
 
     async def connect(self, ws) -> None:
         await ws.accept()
@@ -36,9 +43,26 @@ class Broadcaster:
             self._fh = open(os.path.join(self.record_dir, name), "a", encoding="utf-8")
             self._t0 = time.monotonic()
             log.info("recording match to %s", name)
+            self._prune()
         except OSError as e:
             log.warning("recording disabled: %s", e)
             self._fh = None
+
+    def _prune(self) -> None:
+        files = sorted(glob.glob(os.path.join(self.record_dir, "match_*.jsonl")), key=os.path.getmtime)
+        for f in files[:-self.keep] if self.keep else []:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+    def record(self, type_: str, payload: dict) -> None:
+        """Write an event to the replay file only (not broadcast to live clients)."""
+        if self._fh:
+            dt = round(time.monotonic() - self._t0, 3) if self._t0 else 0.0
+            self._fh.write(json.dumps({"dt": dt, "type": type_, "payload": payload},
+                                      ensure_ascii=False, default=str) + "\n")
+            self._fh.flush()
 
     def stop_recording(self) -> None:
         if self._fh:
@@ -58,8 +82,4 @@ class Broadcaster:
                 dead.append(ws)
         for ws in dead:
             self.disconnect(ws)
-        if self._fh:
-            dt = round(time.monotonic() - self._t0, 3) if self._t0 else 0.0
-            self._fh.write(json.dumps({"dt": dt, "type": type_, "payload": payload},
-                                      ensure_ascii=False, default=str) + "\n")
-            self._fh.flush()
+        self.record(type_, payload)

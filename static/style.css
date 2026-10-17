@@ -78,9 +78,16 @@ body {
 .alert.honeypot { border-left-color: #d946ef; }
 
 /* ---------- center ---------- */
-#center { flex: 1; position: relative; min-width: 0; background: radial-gradient(ellipse at center, #0d1424 0%, #070a12 100%); }
-#graph-wrap, #graph { position: absolute; inset: 0; }
-#view-toggle { position: absolute; top: 12px; right: 14px; display: flex; gap: 6px; z-index: 5; }
+#center { flex: 1; position: relative; min-width: 0; display: flex; flex-direction: column;
+  background: radial-gradient(ellipse at center, #0d1424 0%, #070a12 100%); }
+/* the graph gets its own box: the ATT&CK bar sits BELOW it, never on top of nodes */
+#graph-wrap { position: relative; flex: 1; min-height: 0; }
+#graph { position: absolute; inset: 0; }
+#view-toggle { position: absolute; top: 12px; right: 14px; display: flex; gap: 6px; z-index: 5;
+  pointer-events: none; }
+#view-toggle .toggle { pointer-events: auto; }
+/* host tooltips always float above overlays (ATT&CK bar, view toggle) */
+.force-graph-container .graph-tooltip { z-index: 30; pointer-events: none; }
 .toggle {
   background: var(--panel); color: var(--dim); border: 1px solid var(--border);
   padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
@@ -89,12 +96,17 @@ body {
 
 /* ---------- controls ---------- */
 #controls {
-  display: flex; align-items: center; gap: 10px; padding: 8px 16px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 8px 16px;
   background: var(--panel); border-top: 1px solid var(--border); min-height: 52px;
 }
 .ctl {
-  background: #1a2334; color: var(--text); border: 1px solid var(--border);
+  background: #1a2334; color: var(--text); border: 1px solid var(--border); white-space: nowrap;
   padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px;
+}
+@media (max-width: 1500px) {
+  .ctl { padding: 6px 10px; font-size: 12px; }
+  .models { max-width: 140px; }
+  #speed { width: 90px; }
 }
 .ctl:hover { border-color: var(--blue); }
 .ctl.go { background: #0d3a1e; border-color: var(--green); color: #8ef0b0; }
@@ -117,7 +129,8 @@ body {
 }
 .banner-btn:hover { border-color: var(--gold); }
 .banner-btn.dim { color: var(--dim); }
-#endgame-dock { position: fixed; bottom: 64px; right: 16px; display: flex; gap: 8px; z-index: 40; }
+#endgame-dock { position: fixed; bottom: calc(var(--footer-h, 52px) + 12px); right: 16px;
+  display: flex; gap: 8px; z-index: 40; }
 
 #timeline-modal { position: fixed; inset: 0; background: rgba(5,8,14,.85); z-index: 60; display: flex; align-items: center; justify-content: center; }
 #timeline-card {
@@ -166,7 +179,7 @@ body {
 
 /* ---- ATT&CK heatmap bar (bottom of center pane) ---- */
 #attack-bar {
-  position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 5;
+  position: relative; flex: 0 0 auto; margin: 0 12px 10px; max-height: 32%; overflow-y: auto;
   display: flex; align-items: flex-start; gap: 10px;
   background: rgba(10, 14, 26, 0.82); border: 1px solid var(--border);
   border-radius: 8px; padding: 6px 10px; backdrop-filter: blur(4px);
@@ -207,3 +220,19 @@ body {
 #board-body th, #board-body td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
 #board-body th { background: var(--panel2); }
 #board-body code { background: var(--panel2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+/* report provenance line */
+.report-source { font-size: 12px; color: var(--dim); margin: -4px 0 12px; }
+.report-source.template { color: var(--gold); }
+
+/* ---- narrow screens: stack the panels under the map instead of overflowing ---- */
+@media (max-width: 900px) {
+  body { overflow-y: auto; height: auto; }
+  #topbar { flex-wrap: wrap; gap: 10px 16px; }
+  .brand .sub { display: none; }
+  .stat.chart { width: 120px; }
+  #layout { flex-direction: column; }
+  #center { min-height: 62vh; order: -1; }
+  .panel { width: 100%; max-height: 45vh; border-right: none; border-top: 1px solid var(--border); }
+  #controls { position: sticky; bottom: 0; z-index: 20; }
+}

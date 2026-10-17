@@ -1,9 +1,16 @@
 """Match exports: ATT&CK Navigator layer JSON and a STIX 2.1 bundle.
 
 Both are built from the engine's TurnRecord list, so they work for any
-finished (or in-progress) match. The Navigator layer imports directly into
-https://mitre-attack.github.io/attack-navigator/; the STIX bundle validates
-against STIX 2.1 and imports into TIP tooling.
+finished (or in-progress) match.
+
+- The Navigator layer follows layer format 4.5 and imports directly into
+  https://mitre-attack.github.io/attack-navigator/.
+- The STIX bundle does NOT mint its own attack-pattern objects. Each technique
+  RED used becomes a `sighting` whose `sighting_of_ref` is MITRE's canonical
+  attack-pattern id, so a threat-intel platform that already holds ATT&CK links
+  the sighting to the existing technique instead of creating a duplicate.
+  BLUE's mitigations are attached the same way (notes referencing MITRE's
+  canonical course-of-action ids), and a `report` object ties the match together.
 """
 from __future__ import annotations
 
@@ -13,17 +20,27 @@ import uuid
 from . import attack_map
 from .models import TurnRecord
 
+# stable namespace so the simulated organisation / tool identities keep the same
+# STIX id across every export (TIPs then merge them instead of duplicating)
+_NS = uuid.UUID("6f1c2a52-3c1e-4c55-9d0c-7a1e5b2f9e10")
 
-def _red_techniques(turns: list[TurnRecord]) -> dict[str, dict]:
-    """technique id -> {count, hosts, name, tactic} for successful RED actions."""
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+
+
+def _aggregate(turns: list[TurnRecord], side: str) -> dict[str, dict]:
+    """technique id -> {count, hosts, name, tactic, stix_id, first, last} for successful actions."""
     agg: dict[str, dict] = {}
     for t in turns:
-        if t.side != "red" or not t.success:
+        if t.side != side or not t.success:
             continue
         for tech in attack_map.techniques_for(t.action):
-            e = agg.setdefault(tech["id"], {"count": 0, "hosts": set(),
-                                            "name": tech["name"], "tactic": tech["tactic"]})
+            e = agg.setdefault(tech["id"], {"count": 0, "hosts": set(), "name": tech["name"],
+                                            "tactic": tech["tactic"], "stix_id": tech.get("stix_id"),
+                                            "first": t.ts, "last": t.ts})
             e["count"] += 1
+            e["last"] = t.ts or e["last"]
             if t.args.get("host"):
                 e["hosts"].add(t.args["host"])
     return agg
@@ -32,11 +49,12 @@ def _red_techniques(turns: list[TurnRecord]) -> dict[str, dict]:
 def navigator_layer(turns: list[TurnRecord], seed: int, winner: str | None,
                     reason: str) -> dict:
     """ATT&CK Navigator layer format v4.5 (RED heatmap)."""
-    agg = _red_techniques(turns)
+    agg = _aggregate(turns, "red")
     techniques = [
         {
+            # no "tactic" key: per the layer spec, omitting it applies the annotation
+            # to the technique under every tactic it belongs to
             "techniqueID": tid,
-            "tactic": None,  # tactic-agnostic: color the technique everywhere it appears
             "score": e["count"],
             "color": "#ff2d55",
             "comment": f"{e['count']}x — targets: {', '.join(sorted(e['hosts'])) or '-'}",
@@ -63,7 +81,8 @@ def navigator_layer(turns: list[TurnRecord], seed: int, winner: str | None,
                      "minValue": 0,
                      "maxValue": max((e["count"] for e in agg.values()), default=1)},
         "legendItems": [],
-        "metadata": [],
+        "metadata": [{"name": "seed", "value": str(seed)},
+                     {"name": "outcome", "value": (winner or "in progress")}],
         "links": [],
         "showTacticRowBackground": True,
         "tacticRowBackground": "#14172b",
@@ -71,45 +90,71 @@ def navigator_layer(turns: list[TurnRecord], seed: int, winner: str | None,
     }
 
 
-def _stix_id(type_: str) -> str:
-    return f"{type_}--{uuid.uuid4()}"
-
-
 def stix_bundle(turns: list[TurnRecord], seed: int, winner: str | None, reason: str) -> dict:
-    """Minimal valid STIX 2.1 bundle describing the match."""
-    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-    identity = {
-        "type": "identity", "spec_version": "2.1", "id": _stix_id("identity"),
-        "created": now, "modified": now,
-        "name": "AI Wargame (Sakura Logistics K.K. simulation)",
-        "identity_class": "organization",
+    """STIX 2.1 bundle: sightings of canonical ATT&CK techniques + mitigation notes + report."""
+    now = _now()
+    org = {
+        "type": "identity", "spec_version": "2.1",
+        "id": f"identity--{uuid.uuid5(_NS, 'organisation/sakura-logistics')}",
+        "created": "2026-01-01T00:00:00.000Z", "modified": "2026-01-01T00:00:00.000Z",
+        "name": "Sakura Logistics K.K. (simulated)", "identity_class": "organization",
+        "sectors": ["transportation"],
     }
-    objects: list[dict] = [identity]
+    tool = {
+        "type": "identity", "spec_version": "2.1",
+        "id": f"identity--{uuid.uuid5(_NS, 'tool/ai-wargame')}",
+        "created": "2026-01-01T00:00:00.000Z", "modified": "2026-01-01T00:00:00.000Z",
+        "name": "AI Wargame", "identity_class": "system",
+        "description": "Autonomous red-vs-blue cyber wargame simulation (no real systems involved).",
+    }
+    objects: list[dict] = [org, tool]
+    match_ref = {"source_name": "ai-wargame",
+                 "description": f"Match seed {seed}; outcome {winner or 'in progress'}: {reason}"}
 
-    agg = _red_techniques(turns)
-    for tid, e in sorted(agg.items()):
-        objects.append({
-            "type": "attack-pattern", "spec_version": "2.1",
-            "id": _stix_id("attack-pattern"),
-            "created": now, "modified": now,
-            "name": f"{e['name']} — observed {e['count']}x (seed {seed})",
-            "description": f"Autonomous RED agent used {tid} {e['count']} time(s); "
+    for tid, e in sorted(_aggregate(turns, "red").items()):
+        if not e["stix_id"]:
+            continue
+        s = {
+            "type": "sighting", "spec_version": "2.1",
+            "id": f"sighting--{uuid.uuid4()}", "created": now, "modified": now,
+            "created_by_ref": tool["id"],
+            "sighting_of_ref": e["stix_id"],
+            "where_sighted_refs": [org["id"]],
+            "count": e["count"],
+            "description": f"{tid} {e['name']} observed {e['count']}x; "
                            f"targets: {', '.join(sorted(e['hosts'])) or '-'}.",
             "external_references": [
                 {"source_name": "mitre-attack", "external_id": tid,
-                 "url": attack_map.technique_url(tid)},
-                {"source_name": "ai-wargame", "description":
-                 f"Match seed {seed}; outcome {winner or 'in progress'}: {reason}"},
-            ],
+                 "url": attack_map.technique_url(tid)}, match_ref],
+        }
+        if e["first"] and e["last"]:
+            s["first_seen"], s["last_seen"] = e["first"], e["last"]
+        objects.append(s)
+
+    for mid, e in sorted(_aggregate(turns, "blue").items()):
+        if not e["stix_id"]:
+            continue
+        objects.append({
+            "type": "note", "spec_version": "2.1",
+            "id": f"note--{uuid.uuid4()}", "created": now, "modified": now,
+            "created_by_ref": tool["id"],
+            "abstract": f"Defender applied {mid} {e['name']} ({e['count']}x)",
+            "content": f"BLUE applied mitigation {mid} {e['name']} {e['count']} time(s); "
+                       f"hosts: {', '.join(sorted(e['hosts'])) or '-'}.",
+            "object_refs": [e["stix_id"]],
+            "external_references": [{"source_name": "mitre-attack", "external_id": mid,
+                                     "url": attack_map.technique_url(mid)}],
         })
 
     objects.append({
-        "type": "note", "spec_version": "2.1", "id": _stix_id("note"),
-        "created": now, "modified": now,
-        "abstract": f"AI Wargame match seed {seed}",
-        "content": f"Winner: {(winner or 'in progress').upper()}. {reason}. "
-                   f"{len(turns)} actions recorded.",
-        "authors": ["AI Wargame"],
+        "type": "report", "spec_version": "2.1",
+        "id": f"report--{uuid.uuid4()}", "created": now, "modified": now,
+        "created_by_ref": tool["id"],
+        "name": f"AI Wargame match — seed {seed}",
+        "description": f"Winner: {(winner or 'in progress').upper()}. {reason}. "
+                       f"{len(turns)} actions recorded.",
+        "report_types": ["attack-pattern", "threat-actor"],
+        "published": now,
         "object_refs": [o["id"] for o in objects],
     })
-    return {"type": "bundle", "id": _stix_id("bundle"), "objects": objects}
+    return {"type": "bundle", "id": f"bundle--{uuid.uuid4()}", "objects": objects}

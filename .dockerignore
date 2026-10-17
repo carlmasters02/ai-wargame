@@ -1,0 +1,9 @@
+.venv
+.env
+.git
+.github
+__pycache__
+*.pyc
+replays/match_*.jsonl
+tests
+scripts

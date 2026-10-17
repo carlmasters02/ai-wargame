@@ -1,8 +1,9 @@
-fastapi>=0.110
-uvicorn[standard]>=0.29
-neo4j>=5.19
-openai>=1.30
-pydantic>=2.6
-pydantic-settings>=2.2
-python-dotenv>=1.0
-websockets>=12.0
+# Runtime dependencies — pinned to the versions the test suite runs against.
+fastapi==0.143.2
+uvicorn[standard]==0.54.0
+neo4j==6.4.1
+openai==3.31.0
+pydantic==2.14.1
+pydantic-settings==2.16.0
+python-dotenv==1.2.4
+websockets==17.2

@@ -70,9 +70,11 @@ def main():
     p.add_argument("file")
     p.add_argument("--speed", type=float, default=2.0)
     p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="bind address (use 0.0.0.0 to share on the LAN)")
     args = p.parse_args()
-    print(f"REPLAY MODE: {args.file} at {args.speed}x -> http://localhost:{args.port}")
-    uvicorn.run(create_replay_app(args.file, args.speed), host="0.0.0.0", port=args.port)
+    print(f"REPLAY MODE: {args.file} at {args.speed}x -> http://{args.host}:{args.port}")
+    uvicorn.run(create_replay_app(args.file, args.speed), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -1,19 +1,27 @@
 """FastAPI app: static frontend, one WebSocket, REST controls.
 
-All graph mutations go through the engine's command queue (single-writer rule);
-control flags (pause/resume/step/speed) are safe to set directly.
+Graph-mutating judge commands go through the engine's command queue while a match
+runs (single-writer rule); control flags (pause/resume/step/speed) and model or
+persona swaps are safe to apply directly.
+
+If WARGAME_TOKEN is set, every state-changing endpoint requires it (header
+`X-Wargame-Token`, or `?token=`). Spectating — the page, /ws and GET endpoints —
+never does.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
+import math
 import os
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .agents import Agent
+from .agents import PERSONAS, Agent
 from .config import settings
 from .db import Mirror, init_driver
 from .engine import GameEngine
@@ -31,26 +39,58 @@ engine: GameEngine | None = None
 available_models: list[str] = []
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="AI Wargame")
-    app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
+def require_token(request: Request) -> None:
+    """Gate state-changing endpoints behind WARGAME_TOKEN when one is configured."""
+    if not settings.WARGAME_TOKEN:
+        return
+    given = request.headers.get("x-wargame-token") or request.query_params.get("token") or ""
+    if not hmac.compare_digest(given, settings.WARGAME_TOKEN):
+        raise HTTPException(status_code=401, detail="valid X-Wargame-Token required")
 
-    @app.on_event("startup")
-    async def startup():
-        global engine, available_models
-        neo4j_ok = init_driver(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD) \
-            if settings.neo4j_enabled else False
-        engine = GameEngine(settings, bus, Mirror(enabled=neo4j_ok))
-        if settings.aiand_enabled:
-            engine.agents["red"] = Agent("red", settings.ATTACKER_MODEL, settings,
-                                         persona=engine.red_persona)
-            engine.agents["blue"] = Agent("blue", settings.DEFENDER_MODEL, settings)
-            await _fetch_models()
-            await _prewarm()
-        else:
-            log.warning("AIAND_API_KEY not set — both sides will use heuristic policies")
-        await engine.reset(settings.GAME_SEED)
-        log.info("ready. open http://localhost:8000")
+
+async def _body(request: Request) -> dict:
+    try:
+        data = await request.json()
+    except Exception:  # noqa: BLE001 — empty or non-JSON body
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _status_payload() -> dict:
+    return {"state": engine.state, "llm": settings.aiand_enabled,
+            "speed": engine.speed, "persona": engine.red_persona,
+            "auth": bool(settings.WARGAME_TOKEN),
+            "models": {side: (a.model if a else "heuristic") for side, a in engine.agents.items()},
+            "available_models": available_models}
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    global engine
+    neo4j_ok = init_driver(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD) \
+        if settings.neo4j_enabled else False
+    engine = GameEngine(settings, bus, Mirror(enabled=neo4j_ok))
+    if settings.aiand_enabled:
+        engine.agents["red"] = Agent("red", settings.ATTACKER_MODEL, settings,
+                                     persona=engine.red_persona)
+        engine.agents["blue"] = Agent("blue", settings.DEFENDER_MODEL, settings)
+        await _fetch_models()
+        await _prewarm()
+    else:
+        log.warning("AIAND_API_KEY not set — both sides will use heuristic policies")
+    if settings.WARGAME_TOKEN:
+        log.info("control endpoints require WARGAME_TOKEN (open the page with ?token=...)")
+    await engine.reset(settings.GAME_SEED)
+    log.info("ready. open http://localhost:8000")
+    yield
+    await engine.stop()
+    await engine.mirror.flush()
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="AI Wargame", lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
+    guarded = [Depends(require_token)]
 
     @app.get("/")
     async def index():
@@ -62,19 +102,13 @@ def create_app() -> FastAPI:
         try:
             await websocket.send_json({"type": "graph_snapshot", "payload": engine.snapshot()})
             await websocket.send_json({"type": "metrics", "payload": engine.compute_metrics()})
-            await websocket.send_json({"type": "status", "payload": {
-                "state": engine.state, "llm": settings.aiand_enabled,
-                "speed": engine.speed, "persona": engine.red_persona,
-                "models": {"red": engine.agents["red"].model if engine.agents["red"] else "heuristic",
-                           "blue": engine.agents["blue"].model if engine.agents["blue"] else "heuristic"},
-                "available_models": available_models}})
+            await websocket.send_json({"type": "status", "payload": _status_payload()})
             if engine.winner:
                 await websocket.send_json({"type": "game_over", "payload": {
                     "winner": engine.winner, "reason": engine.win_reason,
                     "rounds": engine.round, "score": engine.compute_metrics()}})
                 if engine.last_report is not None:
-                    await websocket.send_json({"type": "report",
-                                               "payload": {"markdown": engine.last_report}})
+                    await websocket.send_json({"type": "report", "payload": engine.last_report})
             while True:
                 await websocket.receive_text()  # keepalive; client sends nothing meaningful
         except WebSocketDisconnect:
@@ -83,25 +117,25 @@ def create_app() -> FastAPI:
             bus.disconnect(websocket)
 
     # ---- controls ----
-    @app.post("/api/start")
+    @app.post("/api/start", dependencies=guarded)
     async def start():
         await engine.start()
         await engine.emit_state()
         return {"state": engine.state}
 
-    @app.post("/api/pause")
+    @app.post("/api/pause", dependencies=guarded)
     async def pause():
         engine.pause()
         await engine.emit_state()
         return {"state": engine.state}
 
-    @app.post("/api/resume")
+    @app.post("/api/resume", dependencies=guarded)
     async def resume():
         engine.resume()
         await engine.emit_state()
         return {"state": engine.state}
 
-    @app.post("/api/step")
+    @app.post("/api/step", dependencies=guarded)
     async def step():
         if engine.winner:
             return {"state": engine.state}
@@ -112,53 +146,64 @@ def create_app() -> FastAPI:
         await engine.emit_state()
         return {"state": engine.state}
 
-    @app.post("/api/speed")
-    async def speed(body: dict):
-        engine.set_speed(float(body.get("x", 1.0)))
+    @app.post("/api/speed", dependencies=guarded)
+    async def speed(request: Request):
+        try:
+            x = float((await _body(request)).get("x", 1.0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="x must be a number")
+        if not math.isfinite(x):
+            raise HTTPException(status_code=400, detail="x must be finite")
+        engine.set_speed(x)
         return {"speed": engine.speed}
 
-    @app.post("/api/reset")
-    async def reset(body: dict = {}):
-        seed = int(body.get("seed", settings.GAME_SEED))
+    @app.post("/api/reset", dependencies=guarded)
+    async def reset(request: Request):
+        try:
+            seed = int((await _body(request)).get("seed", settings.GAME_SEED))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="seed must be an integer")
         await engine.reset(seed)
         return {"seed": engine.spec.seed, "hosts": len(engine.hosts)}
 
     # ---- judge interventions ----
-    @app.post("/api/intervene/zero_day")
+    @app.post("/api/intervene/zero_day", dependencies=guarded)
     async def zero_day():
         await engine.submit("zero_day", {})
         return {"queued": True}
 
-    @app.post("/api/intervene/insider")
+    @app.post("/api/intervene/insider", dependencies=guarded)
     async def insider():
         await engine.submit("insider", {})
         return {"queued": True}
 
-    @app.post("/api/model")
-    async def model_swap(body: dict):
+    @app.post("/api/model", dependencies=guarded)
+    async def model_swap(request: Request):
+        body = await _body(request)
         side, model = body.get("side"), body.get("model")
-        if side not in ("red", "blue") or not model:
+        if side not in ("red", "blue") or not model or not isinstance(model, str):
             return JSONResponse({"error": "side + model required"}, status_code=400)
         if engine.agents[side] is None:
             return JSONResponse({"error": "LLM not configured (heuristic mode)"}, status_code=409)
+        if available_models and model not in available_models:
+            return JSONResponse({"error": f"unknown model {model!r}"}, status_code=400)
         await engine.run_command("model_swap", {"side": side, "model": model})  # no graph mutation
         return {"queued": True}
 
-    @app.post("/api/persona")
-    async def persona(body: dict):
-        from .agents import PERSONAS
-        p = body.get("persona")
+    @app.post("/api/persona", dependencies=guarded)
+    async def persona(request: Request):
+        p = (await _body(request)).get("persona")
         if p not in PERSONAS:
             return JSONResponse({"error": f"persona must be one of {sorted(PERSONAS)}"},
                                 status_code=400)
         await engine.run_command("persona", {"persona": p})  # no graph mutation
         return {"queued": True, "label": PERSONAS[p]["label"]}
 
+    # ---- read-only ----
     @app.get("/api/models")
     async def models():
         return {"models": available_models,
-                "current": {"red": engine.agents["red"].model if engine.agents["red"] else None,
-                            "blue": engine.agents["blue"].model if engine.agents["blue"] else None}}
+                "current": {side: (a.model if a else None) for side, a in engine.agents.items()}}
 
     @app.get("/api/state")
     async def state():
@@ -208,8 +253,8 @@ async def _fetch_models():
         log.info("ai& models: %s", available_models)
     except Exception as e:  # noqa: BLE001
         log.warning("could not list ai& models: %s", e)
-        available_models = list({settings.ATTACKER_MODEL, settings.DEFENDER_MODEL,
-                                 settings.REPORT_MODEL})
+        available_models = sorted({settings.ATTACKER_MODEL, settings.DEFENDER_MODEL,
+                                   settings.REPORT_MODEL})
 
 
 async def _prewarm():

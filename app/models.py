@@ -100,3 +100,4 @@ class TurnRecord(BaseModel):
     thought: str = ""
     fallback: bool = False
     techniques: list[str] = []  # MITRE ATT&CK / mitigation IDs for this action
+    ts: str = ""                # UTC ISO-8601 time the action was taken (STIX first/last_seen)

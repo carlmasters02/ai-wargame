@@ -200,8 +200,8 @@ def generate(seed: int) -> GraphSpec:
     # --- vulnerabilities ---
     n = 0
     for h in hosts:
-        if h.kind == "internet":
-            continue
+        if h.kind == "internet" or h.id == "SKR-DB-PROD":
+            continue  # the crown jewel only gets its hand-tuned vuln (below)
         count = {"firewall": 2, "webserver": rng.randint(1, 2)}.get(
             h.kind, 1 if rng.random() < 0.85 else 2)
         for _ in range(count):
