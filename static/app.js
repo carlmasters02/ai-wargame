@@ -280,6 +280,7 @@ function clearFeeds() {
   document.getElementById("red-feed").innerHTML = "";
   document.getElementById("blue-feed").innerHTML = "";
   document.getElementById("alerts").innerHTML = "";
+  const tb = document.getElementById("telemetry"); if (tb) tb.innerHTML = "";
 }
 
 const pendingCard = { red: null, blue: null };
@@ -353,10 +354,24 @@ function addAlert(p) {
   const box = document.getElementById("alerts");
   const el = document.createElement("div");
   el.className = "alert" + (p.kind === "honeypot" ? " honeypot" : "");
-  el.innerHTML = `<b>${escapeHtml(p.host)}</b> — ${escapeHtml(p.kind)}
-    <div class="bar"><div style="width:${Math.round(p.confidence * 100)}%"></div></div>`;
+  const sensor = p.source ? `<span class="sensor">${escapeHtml(p.source)}</span>` : "";
+  const sig = p.signature ? `<div class="sig">${escapeHtml(p.signature)}${p.data_source ? ` · ${escapeHtml(p.data_source)}` : ""}</div>` : "";
+  el.innerHTML = `<b>${escapeHtml(p.host)}</b> ${sensor}
+    <div class="bar"><div style="width:${Math.round(p.confidence * 100)}%"></div></div>${sig}`;
   box.prepend(el);
   while (box.children.length > 8) box.lastChild.remove();
+}
+
+function addTelemetry(p) {
+  const box = document.getElementById("telemetry");
+  if (!box) return;
+  const el = document.createElement("div");
+  el.className = "tele" + (p.alerted ? " hot" : "");
+  el.innerHTML = `<span class="sensor">${escapeHtml(p.source)}</span>
+    <span class="tele-host">${escapeHtml(p.host)}</span>
+    <span class="tele-sig">${escapeHtml(p.signature)}</span>`;
+  box.prepend(el);
+  while (box.children.length > 12) box.lastChild.remove();
 }
 
 function trim(feed) { while (feed.children.length > 60) feed.lastChild.remove(); }
@@ -625,6 +640,7 @@ function handle(type, p) {
     case "agent_thought": addThought(p); break;
     case "action_result": addResult(p); break;
     case "alert": addAlert(p); break;
+    case "telemetry": addTelemetry(p); break;
     case "metrics": updateMetrics(p); break;
     case "intervention": onIntervention(p); break;
     case "game_over": showGameOver(p); break;

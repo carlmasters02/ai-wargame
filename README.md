@@ -267,7 +267,21 @@ score. After each BLUE turn there's a 15% chance of a **false positive** on a
 clean host. False positives look exactly like real alerts (same alert types),
 so BLUE has to investigate to tell them apart.
 
-### 6.7 The attack-path metric
+### 6.7 SOC telemetry and detection
+
+Instead of abstract "alerts", RED's actions generate realistic **log events** on
+the sensors a real network runs — Windows Security (logons), Sysmon (LSASS
+access), EDR (exploit behaviour), the firewall/proxy (beaconing, exfil), the
+mail gateway (phishing) and an IDS (scans) — each tagged with its **MITRE
+ATT&CK data source** (DS####). A detection rule turns a fraction of those events
+into **alerts** carrying the sensor and the signature that caught them; the rest
+stay in the raw SIEM stream. Normal business activity throws benign look-alike
+events (a backup job's outbound transfer, an authorised scanner) that sometimes
+trip a rule — the false positives an analyst has to rule out. BLUE sees both the
+alert queue and the recent-events stream and triages like a real SOC: correlate
+an EDR hit with a follow-on remote logon, confirm with INVESTIGATE, then act.
+
+### 6.8 The attack-path metric
 
 After every action the engine counts **viable attack paths** from RED's
 positions (the internet plus every compromised host) to the crown jewel, up
@@ -443,8 +457,8 @@ python scripts/benchmark.py --models deepseek-ai/deepseek-v4-pro,moonshotai/kimi
 ```
 
 **Balance baseline** (heuristic vs heuristic, 100 matches, seeds 2000–2099):
-**RED 13% [8–21% 95% CI] / BLUE 87%**, BLUE score 80±2, MTTD 1.2 rounds,
-exposure reduced 97% — a competitive baseline with two realistic entry vectors
+**RED 10% [5–17% 95% CI] / BLUE 90%**, BLUE score 80±2, MTTD 1.2 rounds,
+exposure reduced 98% — a competitive baseline with two realistic entry vectors
 (perimeter exploitation and spearphishing) and a defender that can genuinely
 evict. LLM pairings vary with model quality, which is the point.
 

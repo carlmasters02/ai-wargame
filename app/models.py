@@ -87,6 +87,20 @@ class Alert(BaseModel):
     kind: str               # scan|exploit|harvest|lateral|exfil|honeypot|false_positive
     confidence: float
     true_positive: bool     # engine-only; NEVER serialized to BLUE
+    source: str = ""        # sensor that fired (EDR, Sysmon, Windows Security, Proxy, ...)
+    signature: str = ""     # human-readable detection signature
+    data_source: str = ""   # MITRE ATT&CK data source id (DS####)
+
+
+class LogEvent(BaseModel):
+    turn: int
+    host: str
+    source: str             # sensor / log source
+    signature: str          # what shows up in the SIEM
+    data_source: str = ""   # MITRE ATT&CK data source id
+    data_source_name: str = ""
+    alerted: bool = False   # did a detection rule fire on this event
+    benign: bool = False    # engine-only: a normal-activity look-alike (NEVER serialized)
 
 
 class TurnRecord(BaseModel):

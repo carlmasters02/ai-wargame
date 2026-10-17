@@ -259,3 +259,19 @@ body {
 .sc-col td { padding: 4px 2px; border-bottom: 1px solid rgba(120,140,180,.12); }
 .sc-col td:last-child { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .sc-note { color: var(--dim); font-size: 11.5px; margin-top: 12px; line-height: 1.5; }
+
+/* ---- telemetry stream + alert sensor enrichment ---- */
+.alerts-head .hd-note { letter-spacing: 0; text-transform: none; font-size: 9px; color: #58607a; margin-left: 6px; }
+#alerts { max-height: 150px; }
+.alert .sensor { font-size: 9px; font-weight: 700; color: #6cb5ff; background: rgba(59,157,255,.12);
+  border-radius: 3px; padding: 0 5px; margin-left: 4px; letter-spacing: .5px; }
+.alert .sig { font-size: 10px; color: var(--dim); margin-top: 3px; line-height: 1.3; }
+#telemetry { padding: 4px 10px 6px; display: flex; flex-direction: column; gap: 3px; max-height: 150px; overflow-y: auto; }
+.tele { display: flex; align-items: baseline; gap: 6px; font-size: 10.5px; color: #8a97b2;
+  border-left: 2px solid var(--border); padding: 2px 6px; background: rgba(13,19,32,.5); border-radius: 3px; }
+.tele.hot { border-left-color: var(--gold); color: #c6d2e3; }
+.tele .sensor { font-size: 9px; font-weight: 700; color: #7d8ba1; background: rgba(125,139,161,.12);
+  border-radius: 3px; padding: 0 4px; white-space: nowrap; }
+.tele.hot .sensor { color: var(--gold); background: rgba(240,180,60,.14); }
+.tele-host { color: #9aa7c2; font-weight: 600; white-space: nowrap; }
+.tele-sig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

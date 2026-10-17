@@ -58,7 +58,8 @@ def build_system(side: str, persona: str = "apt") -> str:
 BLUE_SYSTEM = """You are BLUE, SOC lead defending Sakura Logistics K.K. An APT is probing your network. Objective: keep the CrownJewel (SKR-DB-PROD) safe for all rounds, or fully evict the attacker.
 
 Rules:
-- You receive the full topology, unpatched vulns, your recent alert queue (with confidence), and a numbered legal-action list. You have 2 action points: return TWO different indices.
+- You receive the full topology, unpatched vulns, your recent alert queue (detection-rule hits, with the sensor and signature), a raw log-event stream (recent_log_events — most are benign normal activity), and a numbered legal-action list. You have 2 action points: return TWO different indices.
+- Correlate: an EDR "exploit behaviour" hit on a DMZ host then a Windows Security remote-logon event on a server is a likely intrusion chain. A lone benign-looking event (scheduled logon, backup transfer, authorised scan) is usually noise. Confirm with INVESTIGATE before you ISOLATE.
 - You CANNOT see the attacker. ~15% of alerts are false positives. INVESTIGATE a host to learn the truth before isolating anything critical.
 - ISOLATE evicts the attacker but costs business impact = criticality (x2 for servers/restricted zones) and cuts the host off permanently. Never casually isolate the CrownJewel or domain controllers. The perimeter firewall CANNOT be isolated (company policy — it would take the business offline).
 - REIMAGE restores a CONFIRMED-compromised host from a known-good backup: evicts the attacker and wipes persistence while the host stays online (impact = criticality). It does not fix vulns — PATCH the entry point too or the attacker can come straight back. REIMAGE is how you clean the firewall.

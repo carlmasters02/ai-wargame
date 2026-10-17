@@ -14,8 +14,8 @@ import random
 from collections import deque
 from datetime import datetime, timezone
 
-from . import attack_map, generator, intel, queries, scoring
-from .models import ActionSpec, Alert, Credential, GraphSpec, Host, TurnRecord, Vuln
+from . import attack_map, generator, intel, queries, scoring, telemetry
+from .models import ActionSpec, Alert, Credential, GraphSpec, Host, LogEvent, TurnRecord, Vuln
 from .paths import count_viable_paths
 
 log = logging.getLogger("engine")
@@ -28,6 +28,7 @@ EVASION_FACTOR = 0.4  # DEFENSE_EVASION multiplies future detection noise on tha
 FALSE_POSITIVE_RATE = 0.15
 MAX_HONEYPOTS = 3
 ALERT_WINDOW = 8
+EVENT_WINDOW = 14  # recent log events BLUE can review (the SIEM search window)
 EVICTION_HOLD = 3  # BLUE turns in a row with zero RED footholds before eviction is a win
 STALE_INVESTIGATION = 3  # rounds until an INVESTIGATE verdict goes stale and may be re-run
 FP_KINDS = ("scan", "exploit", "lateral_move", "harvest_creds", "c2_beacon")  # FPs look like real alerts
@@ -64,6 +65,8 @@ class GameEngine:
         self.action_n = 0
         self.alerts: deque[Alert] = deque(maxlen=ALERT_WINDOW)
         self.all_alerts: list[Alert] = []
+        self.events: deque[LogEvent] = deque(maxlen=EVENT_WINDOW)  # recent telemetry for BLUE
+        self.all_events: list[LogEvent] = []
         self.turns: list[TurnRecord] = []
         self.metrics_history: list[dict] = []
         self.impact = 0.0
@@ -646,9 +649,14 @@ class GameEngine:
                 entry["last_investigated_round"] = h.investigated_round
                 entry["confirmed_compromised"] = h.verdict
             hosts.append(entry)
-        alerts = [{"round": a.turn, "host": a.host, "kind": a.kind,
+        alerts = [{"round": a.turn, "host": a.host, "kind": a.kind, "source": a.source,
+                   "signature": a.signature, "data_source": a.data_source,
                    "confidence": round(a.confidence, 2)}
                   for a in sorted(self.alerts, key=lambda a: -a.confidence)]
+        events = [{"round": e.turn, "host": e.host, "source": e.source,
+                   "signature": e.signature, "data_source": e.data_source,
+                   "alerted": e.alerted}  # NOTE: e.benign is engine-only, never exposed
+                  for e in list(self.events)[-EVENT_WINDOW:]]
         return {"side": "blue", "round": self.round,
                 "turns_remaining": self.s.MAX_TURNS - self.round + 1,
                 "crown_jewel": self.cj,
@@ -658,8 +666,10 @@ class GameEngine:
                                            "credential may be stolen",
                           "business_impact": round(self.impact, 1),
                           "alerts_total": len(self.all_alerts)},
-                "hosts": hosts, "alerts": alerts,
-                "note": "~15% of alerts are FALSE POSITIVES. INVESTIGATE before you ISOLATE "
+                "hosts": hosts, "alerts": alerts, "recent_log_events": events,
+                "note": "Alerts are detection-rule hits; recent_log_events is the raw SIEM "
+                        "stream (most are benign). ~15% of alerts are FALSE POSITIVES. "
+                        "INVESTIGATE before you ISOLATE "
                         "or REIMAGE critical hosts. You have 2 action points this turn."}
 
     # ---------------------------------------------------------- resolution
@@ -788,10 +798,12 @@ class GameEngine:
             await self._game_over("red", f"crown jewel {self.cj} exfiltrated in round {self.round}")
 
         if target and target.honeypot and spec.action in ("EXPLOIT", "LATERAL_MOVE"):
-            await self._raise_alert(target.id, "honeypot", 0.97)
+            await self._record_event("HONEYPOT", target.id, alerted=True)
+            await self._raise_alert(target.id, "honeypot", 0.97,
+                                    source="Deception", signature=telemetry.ACTION_EVENTS["HONEYPOT"]["signature"],
+                                    data_source=telemetry.ACTION_EVENTS["HONEYPOT"]["data_source"])
         else:
-            await self._roll_detection(target.id if target else "", noise,
-                                       spec.action.lower())
+            await self._roll_detection(target.id if target else "", noise, spec.action)
         for hid in changed:
             h = self.hosts[hid]
             self.mirror.write(queries.SET_HOST, id=hid,
@@ -956,20 +968,43 @@ class GameEngine:
 
     # ----------------------------------------------------------- detection
     async def _raise_alert(self, host: str, kind: str, confidence: float,
-                           true_positive: bool = True):
-        a = Alert(turn=self.round, host=host, kind=kind,
-                  confidence=round(confidence, 2), true_positive=true_positive)
+                           true_positive: bool = True, source: str = "",
+                           signature: str = "", data_source: str = ""):
+        a = Alert(turn=self.round, host=host, kind=kind, confidence=round(confidence, 2),
+                  true_positive=true_positive, source=source, signature=signature,
+                  data_source=data_source)
         self.alerts.append(a)
         self.all_alerts.append(a)
-        await self.bus.emit("alert", {"host": host, "kind": kind,
+        await self.bus.emit("alert", {"host": host, "kind": kind, "source": source,
+                                      "signature": signature, "data_source": data_source,
                                       "confidence": round(confidence, 2)})
 
-    async def _roll_detection(self, host: str, noise: float, kind: str):
+    async def _record_event(self, action: str, host: str, alerted: bool = False) -> LogEvent | None:
+        """Record the telemetry a RED action generates on a sensor (always, whether or not
+        it trips a rule). BLUE can review the raw stream — most events are benign."""
+        spec = telemetry.event_for(action, host)
+        if not spec:
+            return None
+        ev = LogEvent(turn=self.round, alerted=alerted, **spec)
+        self.events.append(ev)
+        self.all_events.append(ev)
+        await self.bus.emit("telemetry", {"turn": self.round, "host": host, "source": ev.source,
+                                          "signature": ev.signature, "data_source": ev.data_source,
+                                          "data_source_name": ev.data_source_name, "alerted": alerted})
+        return ev
+
+    async def _roll_detection(self, host: str, noise: float, action: str):
         if host in self.evasion:
             noise *= EVASION_FACTOR
-        if host and self.rng.random() < noise:
+        fires = bool(host) and self.rng.random() < noise
+        ev = await self._record_event(action, host, alerted=fires)
+        if fires:
             conf = min(0.95, noise + self.rng.random() * 0.35)
-            await self._raise_alert(host, kind, conf)
+            src = ev.source if ev else ""
+            sig = ev.signature if ev else ""
+            ds = ev.data_source if ev else ""
+            await self._raise_alert(host, action.lower(), conf, source=src,
+                                    signature=sig, data_source=ds)
 
     async def _maybe_false_positive(self):
         if self.rng.random() < FALSE_POSITIVE_RATE:
@@ -978,8 +1013,18 @@ class GameEngine:
             if clean:
                 h = self.rng.choice(clean)
                 conf = 0.25 + self.rng.random() * 0.3
+                be = telemetry.benign_event(h.id, self.rng.choice)
+                ev = LogEvent(turn=self.round, alerted=True, benign=True, **be)
+                self.events.append(ev); self.all_events.append(ev)
+                await self.bus.emit("telemetry", {"turn": self.round, "host": h.id,
+                                                  "source": be["source"], "signature": be["signature"],
+                                                  "data_source": be["data_source"],
+                                                  "data_source_name": be["data_source_name"],
+                                                  "alerted": True})
                 # kind mimics a real detection: BLUE must not be able to tell FPs apart
-                await self._raise_alert(h.id, self.rng.choice(FP_KINDS), conf, true_positive=False)
+                await self._raise_alert(h.id, self.rng.choice(FP_KINDS), conf, true_positive=False,
+                                        source=be["source"], signature=be["signature"],
+                                        data_source=be["data_source"])
 
     # -------------------------------------------------------- interventions
     async def _inject_zero_day(self):
