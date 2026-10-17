@@ -476,6 +476,12 @@ function showGameOver(p) {
 function fmt(v, dash = "–") { return v == null ? dash : v; }
 function usd(n) { return n == null ? "–" : "$" + Math.round(n).toLocaleString(); }
 
+function openExecReport() {
+  // open the printable executive briefing in a new tab (print -> PDF from there)
+  const url = "/api/report/executive" + (controlToken ? `?token=${encodeURIComponent(controlToken)}` : "");
+  window.open(url, "_blank");
+}
+
 function openScorecard() {
   const modal = document.getElementById("scorecard-modal");
   const body = document.getElementById("scorecard-body");
@@ -856,6 +862,8 @@ function initControls() {
   document.getElementById("banner-report").onclick = openReport;
   document.getElementById("banner-scorecard").onclick = openScorecard;
   document.getElementById("dock-scorecard").onclick = openScorecard;
+  document.getElementById("banner-exec").onclick = openExecReport;
+  document.getElementById("dock-exec").onclick = openExecReport;
   document.getElementById("scorecard-close").onclick = () =>
     document.getElementById("scorecard-modal").classList.add("hidden");
   document.getElementById("banner-timeline").onclick = openTimeline;

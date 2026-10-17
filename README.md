@@ -417,6 +417,15 @@ mid-match):
 
 ---
 
+## 10a. Executive report
+
+The **📑 EXEC REPORT** button (on the endgame banner/dock) opens a self-contained,
+printable **executive briefing** at `GET /api/report/executive`: the verdict,
+defensive performance (grade, MTTD/MTTR, exposure reduced, detection coverage),
+the incident summary (opened/contained/false-positive, mean-time-to-contain), the
+dollar **business impact**, the prioritised remediation plan, and the MITRE ATT&CK
+techniques observed — on one branded page a CISO or investor can print to PDF.
+
 ## 11. Endgame: report and timeline
 
 - **📋 After-action report**: streamed from `REPORT_MODEL` (falling back to the

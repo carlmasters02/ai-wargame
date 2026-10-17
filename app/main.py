@@ -18,7 +18,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agents import PERSONAS, Agent
@@ -27,7 +27,7 @@ from .config import settings
 from .db import Mirror, init_driver
 from .engine import GameEngine
 from .events import Broadcaster
-from . import export, importer
+from . import exec_report, export, importer
 from .intel import intel_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -287,6 +287,16 @@ def create_app() -> FastAPI:
                                     engine.winner, engine.win_reason)
         return JSONResponse(bundle, headers={
             "Content-Disposition": "attachment; filename=match_stix_bundle.json"})
+
+    @app.get("/api/report/executive")
+    async def executive_report():
+        if not engine.turns:
+            return JSONResponse({"error": "no match data yet"}, status_code=404)
+        html_doc = exec_report.build(
+            engine.spec.seed if engine.spec else 0, engine.scenario, engine.winner,
+            engine.win_reason, engine.round, engine.scorecard(), engine.exposure_analysis(),
+            engine.casebook.summary(), engine.turns)
+        return HTMLResponse(html_doc)
 
     @app.get("/api/benchmarks")
     async def benchmarks():
