@@ -344,3 +344,17 @@ body {
 .sev-high { background: rgba(240,140,60,.2); color: #f0a860; }
 .sev-med { background: rgba(240,180,60,.18); color: var(--gold); }
 .sev-low { background: rgba(125,139,161,.15); color: var(--dim); }
+
+/* ---- match history ---- */
+#history-modal { position: fixed; inset: 0; background: rgba(5,8,14,.85); z-index: 60; display: flex; align-items: center; justify-content: center; }
+#history-card { width: min(820px, 96vw); max-height: 86vh; overflow-y: auto; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; position: relative; }
+#history-card h2 { margin-bottom: 12px; }
+#history-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: var(--dim); font-size: 20px; cursor: pointer; }
+#history-summary { display: flex; gap: 18px; font-size: 13px; color: var(--dim); margin-bottom: 12px; }
+#history-summary b { color: var(--text); }
+.hist-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hist-table th { text-align: left; color: var(--dim); font-size: 10px; letter-spacing: .5px; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.hist-table td { padding: 5px 8px; border-bottom: 1px solid rgba(120,140,180,.1); }
+.hist-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.h-when { color: var(--dim); white-space: nowrap; }

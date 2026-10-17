@@ -83,6 +83,7 @@ async def lifespan(_app: FastAPI):
         log.warning("AIAND_API_KEY not set — both sides will use heuristic policies")
     if settings.WARGAME_TOKEN:
         log.info("control endpoints require WARGAME_TOKEN (open the page with ?token=...)")
+    engine.history_path = os.path.join(BASE, "data", "match_history.json")
     await engine.reset(settings.GAME_SEED)
     log.info("ready. open http://localhost:8000")
     yield
@@ -268,6 +269,12 @@ def create_app() -> FastAPI:
     @app.get("/api/cases")
     async def cases_report():
         return {"cases": engine.casebook.public(), "summary": engine.casebook.summary()}
+
+    @app.get("/api/history")
+    async def match_history():
+        from . import history
+        return history.recent(engine.history_path or
+                              os.path.join(BASE, "data", "match_history.json"))
 
     @app.get("/api/state")
     async def state():

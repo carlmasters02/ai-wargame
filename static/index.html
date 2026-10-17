@@ -72,6 +72,7 @@
   </select>
   <span id="campaign-score" class="hidden"></span>
   <button id="btn-board" class="ctl" title="Benchmark leaderboard">🏆</button>
+  <button id="btn-history" class="ctl" title="Match history">📜</button>
   <button id="btn-cases" class="ctl" title="SOC case board — incidents">📁 <span id="cases-badge">0</span></button>
   <button id="btn-exposure" class="ctl" title="Exposure analysis — top fixes">🎯</button>
   <button id="btn-import" class="ctl" title="Import a real network (CSV / Nmap XML)">⬆ IMPORT</button>
@@ -164,6 +165,15 @@
     <button id="exposure-close">✕</button>
     <h2>🎯 EXPOSURE ANALYSIS</h2>
     <div id="exposure-body"></div>
+  </div>
+</div>
+
+<div id="history-modal" class="hidden">
+  <div id="history-card">
+    <button id="history-close">✕</button>
+    <h2>📜 MATCH HISTORY</h2>
+    <div id="history-summary"></div>
+    <div id="history-body"></div>
   </div>
 </div>
 

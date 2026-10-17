@@ -4,3 +4,4 @@ __pycache__/
 replays/match_*.jsonl
 *.pyc
 .pytest_cache/
+data/match_history.json

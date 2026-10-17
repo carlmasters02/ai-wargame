@@ -880,6 +880,9 @@ function initControls() {
     resetCampaign();
   };
   document.getElementById("btn-board").onclick = openBoard;
+  document.getElementById("btn-history").onclick = openHistory;
+  document.getElementById("history-close").onclick = () =>
+    document.getElementById("history-modal").classList.add("hidden");
   document.getElementById("btn-exposure").onclick = openExposure;
   document.getElementById("btn-cases").onclick = openCases;
   document.getElementById("cases-close").onclick = () =>
@@ -969,6 +972,32 @@ async function openExposure() {
   } catch (e) {
     body.innerHTML = "<p style='color:#7d8ba1'>Exposure analysis unavailable.</p>";
   }
+}
+
+async function openHistory() {
+  const modal = document.getElementById("history-modal");
+  modal.classList.remove("hidden");
+  const body = document.getElementById("history-body");
+  const sum = document.getElementById("history-summary");
+  body.innerHTML = "<p style='color:#7d8ba1'>Loading…</p>";
+  try {
+    const d = await (await fetch("/api/history")).json();
+    sum.innerHTML = `<span><b>${d.count}</b> matches</span>
+      <span style="color:#ff5c7c"><b>${d.red_wins}</b> RED wins</span>
+      <span style="color:#6cb5ff"><b>${d.blue_wins}</b> BLUE wins</span>`;
+    const rows = (d.matches || []).map((m) => `<tr>
+      <td class="h-when">${escapeHtml((m.ts||"").replace("T"," ").replace("Z",""))}</td>
+      <td>${escapeHtml(m.scenario||"")}</td>
+      <td class="mono">${m.seed ?? "–"}</td>
+      <td style="color:${m.winner==="red"?"#ff5c7c":"#6cb5ff"}">${(m.winner||"–").toUpperCase()}</td>
+      <td class="mono">${escapeHtml(m.red_model||"")} vs ${escapeHtml(m.blue_model||"")}</td>
+      <td class="num">${m.blue_grade}·${m.blue_score}</td>
+      <td class="num">${m.business_cost_usd!=null?"$"+Math.round(m.business_cost_usd).toLocaleString():"–"}</td>
+    </tr>`).join("");
+    body.innerHTML = rows ? `<table class="hist-table">
+      <tr><th>When (UTC)</th><th>Scenario</th><th>Seed</th><th>Winner</th><th>RED vs BLUE</th><th class="num">BLUE</th><th class="num">Cost</th></tr>
+      ${rows}</table>` : "<p style='color:#7d8ba1'>No finished matches yet. Play one and it'll appear here.</p>";
+  } catch (e) { body.innerHTML = "<p style='color:#7d8ba1'>History unavailable.</p>"; }
 }
 
 async function openBoard() {

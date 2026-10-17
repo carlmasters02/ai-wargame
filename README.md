@@ -517,6 +517,13 @@ evict. LLM pairings vary with model quality, which is the point.
 
 ---
 
+## 12a. Match history
+
+Every finished match is appended to `data/match_history.json` (git-ignored, capped
+at 500) and shown in the **📜 history** view: timestamp, scenario, seed, winner,
+the models that played, BLUE's grade and the dollar cost — so you can track how a
+model or defender trends across many games. `GET /api/history`.
+
 ## 13. Replays and offline demos
 
 Every live match is recorded to `replays/match_<time>_seed<N>.jsonl`

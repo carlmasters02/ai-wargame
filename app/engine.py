@@ -44,6 +44,8 @@ class GameEngine:
         self.speed = 1.0
         self.turn_delay = 3.0
         self.reports_enabled = True  # headless benchmarks set False (skip LLM report)
+        self.history_enabled = True  # record finished matches to disk (benchmarks/tests off)
+        self.history_path = ""       # set by main.py
         self.command_queue: asyncio.Queue = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._step = False
@@ -1193,6 +1195,12 @@ class GameEngine:
         self.winner = winner
         self.win_reason = reason
         self.state = "game_over"
+        if self.history_enabled and self.history_path:
+            from . import history
+            try:
+                history.record(self.history_path, history.summarise(self))
+            except Exception:  # noqa: BLE001 — history must never break the game
+                log.exception("history record failed")
         await self.bus.emit("game_over", {"winner": winner, "reason": reason,
                                           "rounds": self.round,
                                           "score": self.compute_metrics(),
