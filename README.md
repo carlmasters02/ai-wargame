@@ -623,14 +623,22 @@ uses the runtime view (only credentials the attacker has actually stolen count).
 | POST | `/api/intervene/insider` | | Judge: insider threat. |
 | POST | `/api/model` | `{"side": "red", "model": "…"}` | Swap a side's model. |
 | POST | `/api/persona` | `{"persona": "apt"\|"ransomware"\|"ghost"}` | Change RED's persona. |
-
-All `POST` endpoints require the `X-Wargame-Token` header when `WARGAME_TOKEN`
-is set; `GET` endpoints and `/ws` never do.
+| POST | `/api/control` | `{"side", "who": "auto"\|"human"}` | Set who plays a side (Human vs AI). |
+| POST | `/api/act` | `{"indices": [N,…]}` | Submit the human player's action(s) on their turn. |
+| POST | `/api/config` | `{"difficulty", "max_turns"}` | Tune difficulty / match length. |
 | GET | `/api/models` | | Available and current models. |
+| GET | `/api/cases` | | SOC incident board + summary. |
+| GET | `/api/exposure` | | Prioritised remediation (top fixes + plan). |
+| GET | `/api/history` | | Recent finished matches + win tally. |
+| GET | `/api/report/executive` | | Printable executive briefing (HTML). |
 | GET | `/api/state` | | State, round, winner, metrics, intel status. |
 | GET | `/api/export/navigator` | | ATT&CK Navigator layer. |
 | GET | `/api/export/stix` | | STIX 2.1 bundle. |
 | GET | `/api/benchmarks` | | Latest leaderboard JSON. |
+
+`/api/reset` also accepts `{"scenario"}` ([§11a](#11a-scenario-library)). All `POST`
+endpoints require the `X-Wargame-Token` header when `WARGAME_TOKEN` is set; `GET`
+endpoints and `/ws` never do.
 
 ### WebSocket `/ws`
 
@@ -646,10 +654,14 @@ The server pushes `{"type": …, "payload": …}` events:
 | `turn_start` | A side's turn begins. |
 | `agent_thought` | The agent's reasoning, model used, fallback flag. |
 | `action_result` | Each resolved action with narration and ATT&CK techniques. |
-| `alert` | A new alert in BLUE's queue. |
+| `alert` | A new alert in BLUE's queue (sensor + signature). |
+| `telemetry` | A raw SIEM log event (most are benign). |
+| `case` | A SOC incident opened or updated. |
+| `your_turn` / `your_turn_end` | Human player's turn begins / ends (with the legal-action menu). |
 | `intervention` | Judge event, model swap or persona change. |
-| `game_over` | Winner, reason, rounds. |
-| `report` | The after-action report (markdown). |
+| `game_over` | Winner, reason, rounds, SOC scorecard, cases. |
+| `report` | The after-action report (source + markdown). |
+| `report_pending` | The after-action report is being written. |
 | `error` | The game loop crashed; see the server log. |
 
 ---
