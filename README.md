@@ -445,6 +445,12 @@ Every match produces a **SOC scorecard** (the 📊 button, or `game_over.scoreca
 
 Each side also gets a 0–100 composite **score and grade (A–F)**.
 
+Every match also prices the incident in **dollars** — downtime from isolating or
+reimaging hosts, incident-response effort per compromised host, and a breach
+loss if RED reached the objective (anchored to public breach benchmarks). This
+surfaces the "won, but at what cost" trade-off: a defender that isolates
+everything wins the round but can run up seven figures in downtime.
+
 **Cross-provider benchmarking.** Set `MODEL_PROVIDERS` and prefix a model id
 with its provider (`openai:gpt-4o`, `anthropic:claude-...`); a bare id uses ai&.
 RED and BLUE can run on different providers in the same match.

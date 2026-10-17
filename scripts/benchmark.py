@@ -119,6 +119,7 @@ def aggregate(pair: str, results: list[dict]) -> dict:
         "mttr_rounds": _mean_ci(_sc(valid, ["blue", "mttr_rounds"])),
         "false_isolations": _mean_ci(_sc(valid, ["blue", "false_isolations"])),
         "exposure_reduction": _mean_ci(_sc(valid, ["blue", "exposure_reduction"])),
+        "business_cost_usd": _mean_ci(_sc(valid, ["business_cost", "total_usd"])),
         "red_stealth": _mean_ci(_sc(valid, ["red", "stealth"])),
         "red_latency_ms": _mean_ci(_sc(valid, ["red_cost", "avg_latency_ms"])),
         "blue_latency_ms": _mean_ci(_sc(valid, ["blue_cost", "avg_latency_ms"])),

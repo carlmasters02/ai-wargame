@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 
+from . import costs
 from .models import Alert, TurnRecord
 
 RED_COMPROMISE = ("EXPLOIT", "LATERAL_MOVE", "PHISH_USER")  # actions that can take a host
@@ -88,6 +89,7 @@ class Scorecard:
     blue: BlueScore = field(default_factory=BlueScore)
     red_cost: CostScore = field(default_factory=CostScore)
     blue_cost: CostScore = field(default_factory=CostScore)
+    business_cost: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self) | {
@@ -140,8 +142,9 @@ def _cost(turns: list[TurnRecord], side: str) -> CostScore:
 
 def build(turns: list[TurnRecord], alerts: list[Alert], metrics_history: list[dict],
           winner: str | None, reason: str, rounds: int,
-          host_criticality: dict[str, int] | None = None) -> Scorecard:
-    host_criticality = host_criticality or {}
+          host_info: dict[str, dict] | None = None) -> Scorecard:
+    host_info = host_info or {}
+    host_criticality = {h: info.get("criticality", 5) for h, info in host_info.items()}
 
     # --- when was each host first compromised (ground truth from the turn log) ---
     first_compromise: dict[str, int] = {}
@@ -197,4 +200,5 @@ def build(turns: list[TurnRecord], alerts: list[Alert], metrics_history: list[di
         if blue.exposure_peak else 0.0
 
     return Scorecard(winner=winner, reason=reason, rounds=rounds, red=red, blue=blue,
-                     red_cost=_cost(turns, "red"), blue_cost=_cost(turns, "blue"))
+                     red_cost=_cost(turns, "red"), blue_cost=_cost(turns, "blue"),
+                     business_cost=costs.breakdown(turns, host_info, rounds, winner))

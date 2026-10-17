@@ -275,3 +275,12 @@ body {
 .tele.hot .sensor { color: var(--gold); background: rgba(240,180,60,.14); }
 .tele-host { color: #9aa7c2; font-weight: 600; white-space: nowrap; }
 .tele-sig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- scorecard business-cost block ---- */
+.sc-cost { margin-top: 16px; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: rgba(255,214,10,.04); }
+.sc-cost-head { font-weight: 700; font-size: 13px; color: var(--gold); margin-bottom: 8px; }
+.sc-cost-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; border-bottom: 1px solid rgba(120,140,180,.1); }
+.sc-cost-row span { color: var(--dim); }
+.sc-cost-row b { font-variant-numeric: tabular-nums; }
+.sc-cost-row.total { border-bottom: none; margin-top: 4px; padding-top: 7px; border-top: 1px solid var(--border); font-size: 15px; }
+.sc-cost-row.total b { color: var(--gold); }

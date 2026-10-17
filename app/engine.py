@@ -1116,7 +1116,8 @@ class GameEngine:
         return scoring.build(
             self.turns, self.all_alerts, self.metrics_history, self.winner,
             self.win_reason, self.round,
-            {h.id: h.criticality for h in self.hosts.values()}).to_dict()
+            {h.id: {"criticality": h.criticality, "zone": h.zone}
+             for h in self.hosts.values()}).to_dict()
 
     def report_context(self) -> dict:
         """Ground-truth facts left unresolved at the end, for data-driven recommendations."""

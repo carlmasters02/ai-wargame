@@ -17,7 +17,8 @@ def test_mttd_mttr_and_false_isolation():
     ]
     turns[3].args = {"host": "H1"}
     hist = [{"round": 1, "paths": 10, "impact": 0}, {"round": 5, "paths": 4, "impact": 6}]
-    sc = scoring.build(turns, [], hist, "blue", "x", 5, {"H1": 8, "H2": 5})
+    sc = scoring.build(turns, [], hist, "blue", "x", 5,
+                       {"H1": {"criticality": 8, "zone": "servers"}, "H2": {"criticality": 5, "zone": "corp"}})
     assert sc.blue.detected == 1 and sc.blue.missed == 1
     assert sc.blue.mttd_rounds == 2.0 and sc.blue.mttr_rounds == 1.0
     assert sc.blue.false_isolations == 1 and sc.blue.evictions == 1
@@ -66,3 +67,21 @@ def test_scorecard_from_a_real_match(make_engine):
         assert 0 <= sc["red"]["score"] <= 100 and sc["red"]["grade"] in "ABCDF"
         assert sc["blue_cost"]["fallback_rate"] == 1.0  # pure heuristic match
     run(go())
+
+
+def test_business_cost_model():
+    from app import costs
+    turns = [
+        _t(1, 1, "red", "EXPLOIT", target="H1"),
+        _t(2, 2, "red", "EXFILTRATE"),
+        _t(3, 3, "blue", "ISOLATE", was_compromised=True),
+    ]
+    turns[2].args = {"host": "H1"}
+    hosts = {"H1": {"criticality": 10, "zone": "restricted"}}
+    bc = costs.breakdown(turns, hosts, total_rounds=5, winner="red")
+    assert bc["breach_usd"] == costs.BREACH_BASE          # RED reached the objective
+    assert bc["response_usd"] == costs.RESPONSE_PER_HOST  # one host compromised
+    assert bc["downtime_usd"] > 0                         # isolated for 3 rounds
+    assert bc["total_usd"] == bc["breach_usd"] + bc["response_usd"] + bc["downtime_usd"]
+    # a BLUE win incurs no breach cost
+    assert costs.breakdown(turns, hosts, 5, "blue")["breach_usd"] == 0

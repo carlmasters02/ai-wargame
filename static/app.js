@@ -473,6 +473,7 @@ function showGameOver(p) {
 }
 
 function fmt(v, dash = "–") { return v == null ? dash : v; }
+function usd(n) { return n == null ? "–" : "$" + Math.round(n).toLocaleString(); }
 
 function openScorecard() {
   const modal = document.getElementById("scorecard-modal");
@@ -480,7 +481,7 @@ function openScorecard() {
   const sc = lastScorecard;
   if (!sc) { body.innerHTML = "<p style='color:#7d8ba1'>No scorecard for this match.</p>"; }
   else {
-    const r = sc.red, b = sc.blue, rc = sc.red_cost, bc = sc.blue_cost;
+    const r = sc.red, b = sc.blue, rc = sc.red_cost, bc = sc.blue_cost, bcost = sc.business_cost || {};
     const cost = (c) => c.avg_latency_ms == null
       ? "<span style='color:#7d8ba1'>heuristic</span>"
       : `${Math.round(c.avg_latency_ms)} ms · ${c.avg_tokens ? Math.round(c.avg_tokens) + " tok" : "–"} · ${Math.round(c.fallback_rate*100)}% fallback`;
@@ -509,8 +510,16 @@ function openScorecard() {
           </table>
         </div>
       </div>
+      <div class="sc-cost">
+        <div class="sc-cost-head">💰 BUSINESS IMPACT</div>
+        <div class="sc-cost-row"><span>Downtime (isolation / reimage)</span><b>${usd(bcost.downtime_usd)}</b></div>
+        <div class="sc-cost-row"><span>Incident response (${bcost.hosts_requiring_response} host${bcost.hosts_requiring_response===1?"":"s"})</span><b>${usd(bcost.response_usd)}</b></div>
+        <div class="sc-cost-row"><span>Breach loss (objective reached)</span><b>${usd(bcost.breach_usd)}</b></div>
+        <div class="sc-cost-row total"><span>Total cost to the business</span><b>${usd(bcost.total_usd)}</b></div>
+      </div>
       <p class="sc-note">MTTD = mean rounds to detect a compromise; MTTR = rounds from detection to eviction.
-      Scores are 0–100 SOC composites (coverage, speed, precision, exposure control).</p>`;
+      Scores are 0–100 SOC composites (coverage, speed, precision, exposure control). Costs are illustrative,
+      anchored to public breach benchmarks.</p>`;
   }
   modal.classList.remove("hidden");
 }
