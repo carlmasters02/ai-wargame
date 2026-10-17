@@ -849,8 +849,38 @@ function initControls() {
     resetCampaign();
   };
   document.getElementById("btn-board").onclick = openBoard;
+  document.getElementById("btn-exposure").onclick = openExposure;
+  document.getElementById("exposure-close").onclick = () =>
+    document.getElementById("exposure-modal").classList.add("hidden");
   document.getElementById("board-close").onclick = () =>
     document.getElementById("board-modal").classList.add("hidden");
+}
+
+async function openExposure() {
+  const modal = document.getElementById("exposure-modal");
+  const body = document.getElementById("exposure-body");
+  modal.classList.remove("hidden");
+  body.innerHTML = "<p style='color:#7d8ba1'>Analysing attack paths…</p>";
+  try {
+    const d = await (await fetch("/api/exposure")).json();
+    const fixes = (d.top_fixes || []).map((f) => `
+      <tr><td><span class="xf-act">${escapeHtml(f.action)}</span> ${escapeHtml(f.label)}</td>
+        <td class="xf-num">−${f.paths_removed}</td>
+        <td><div class="xf-bar"><div style="width:${Math.round(f.pct_removed*100)}%"></div></div>
+          <span class="xf-pct">${Math.round(f.pct_removed*100)}%</span></td></tr>`).join("");
+    const plan = (d.minimal_fix_plan || []).map((f, i) =>
+      `<li>${escapeHtml(f.label)} <span class="xf-left">→ ${f.paths_after} paths left</span></li>`).join("");
+    body.innerHTML = `
+      <p class="xf-lead">Current exposure: <b>${d.current_exposure}</b> viable attack path${d.current_exposure===1?"":"s"} to the crown jewel.</p>
+      <h3>Highest-impact single fixes</h3>
+      ${fixes ? `<table class="xf-table">${fixes}</table>` : "<p style='color:#7d8ba1'>No single fix reduces exposure right now.</p>"}
+      <h3>Minimal fix plan ${plan ? `<span class="xf-left">(${d.minimal_fix_plan.length} step${d.minimal_fix_plan.length===1?"":"s"} → ${d.residual_after_plan} residual)</span>` : ""}</h3>
+      ${plan ? `<ol class="xf-plan">${plan}</ol>` : "<p style='color:#7d8ba1'>Already at minimal exposure.</p>"}
+      <p class="sc-note">Each fix is scored by how many attack paths it removes now. The plan greedily
+      applies the most impactful fix until exposure reaches zero — a prioritised remediation backlog.</p>`;
+  } catch (e) {
+    body.innerHTML = "<p style='color:#7d8ba1'>Exposure analysis unavailable.</p>";
+  }
 }
 
 async function openBoard() {

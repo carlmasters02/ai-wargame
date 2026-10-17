@@ -14,7 +14,7 @@ import random
 from collections import deque
 from datetime import datetime, timezone
 
-from . import attack_map, generator, intel, queries, scoring, telemetry
+from . import attack_map, exposure, generator, intel, queries, scoring, telemetry
 from .models import ActionSpec, Alert, Credential, GraphSpec, Host, LogEvent, TurnRecord, Vuln
 from .paths import count_viable_paths
 
@@ -1167,6 +1167,12 @@ class GameEngine:
             self._report_task = asyncio.get_running_loop().create_task(self._emit_report())
         else:
             self.bus.stop_recording()
+
+    def exposure_analysis(self, top: int = 8) -> dict:
+        """Prioritised remediation: which fixes remove the most attack paths right now."""
+        return exposure.analyse(list(self.hosts.values()), self.edges,
+                                list(self.vulns.values()), list(self.creds.values()),
+                                self.cj, top=top)
 
     def scorecard(self) -> dict:
         """SOC-style scorecard for the match (the model-evaluation metrics)."""

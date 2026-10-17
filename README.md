@@ -519,6 +519,16 @@ Aura browser during a match.
 
 ---
 
+## 14a. Exposure analysis (prioritised remediation)
+
+The **🎯** button answers the question a CISO actually asks: *of everything we
+could fix, what cuts the most risk?* It measures how many viable attack paths to
+the crown jewel each candidate fix (patch a vuln, rotate a user's credentials,
+isolate/reimage a compromised host) removes **right now**, ranks them, and builds
+a greedy **minimal fix plan** that drives exposure toward zero — a prioritised
+remediation backlog. Available any time via `GET /api/exposure`. This is the core
+of a continuous-threat-exposure-management (CTEM) workflow, run on the live graph.
+
 ## 15. API reference
 
 ### REST

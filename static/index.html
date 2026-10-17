@@ -71,6 +71,7 @@
   </select>
   <span id="campaign-score" class="hidden"></span>
   <button id="btn-board" class="ctl" title="Benchmark leaderboard">🏆</button>
+  <button id="btn-exposure" class="ctl" title="Exposure analysis — top fixes">🎯</button>
   <select id="play-red" class="models" title="Who plays RED">
     <option value="auto">🤖 RED: AI</option>
     <option value="human">🧑 RED: You</option>
@@ -140,6 +141,14 @@
     <h2>🕒 MATCH TIMELINE</h2>
     <div id="timeline-summary"></div>
     <div id="timeline-body"></div>
+  </div>
+</div>
+
+<div id="exposure-modal" class="hidden">
+  <div id="exposure-card">
+    <button id="exposure-close">✕</button>
+    <h2>🎯 EXPOSURE ANALYSIS</h2>
+    <div id="exposure-body"></div>
   </div>
 </div>
 

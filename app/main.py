@@ -230,6 +230,10 @@ def create_app() -> FastAPI:
         return {"models": available_models,
                 "current": {side: (a.model if a else None) for side, a in engine.agents.items()}}
 
+    @app.get("/api/exposure")
+    async def exposure_report():
+        return engine.exposure_analysis()
+
     @app.get("/api/state")
     async def state():
         return {"state": engine.state, "round": engine.round, "winner": engine.winner,
