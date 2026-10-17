@@ -46,6 +46,9 @@ class GameEngine:
         self.reports_enabled = True  # headless benchmarks set False (skip LLM report)
         self.history_enabled = True  # record finished matches to disk (benchmarks/tests off)
         self.history_path = ""       # set by main.py
+        # runtime-tunable config (see set_config): difficulty scales BLUE's detection sensitivity
+        self.config = {"difficulty": "normal", "max_turns": settings.MAX_TURNS,
+                       "false_positive_rate": FALSE_POSITIVE_RATE}
         self.command_queue: asyncio.Queue = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._step = False
@@ -198,7 +201,7 @@ class GameEngine:
                        "protocol": e.protocol, "blocked": e.blocked} for e in self.edges],
             "crown_jewel": self.cj,
             "seed": self.spec.seed if self.spec else 0,
-            "max_rounds": self.s.MAX_TURNS,
+            "max_rounds": self.max_turns,
             "round": self.round,
             "actions": len(self.turns),
             "scenario": self.scenario,
@@ -238,7 +241,7 @@ class GameEngine:
             "paths": paths, "capped": capped, "shortest_path_ids": shortest,
             "compromised": len(self._controlled(include_internet=False)),
             "impact": round(self.impact, 1), "alerts": len(self.all_alerts),
-            "round": self.round, "max_rounds": self.s.MAX_TURNS,
+            "round": self.round, "max_rounds": self.max_turns,
         }
 
     def defender_exposure(self) -> tuple[int, bool]:
@@ -303,7 +306,25 @@ class GameEngine:
 
     async def emit_state(self):
         await self.bus.emit("control", {"state": self.state, "speed": self.speed,
-                                        "persona": self.red_persona, "players": self.control})
+                                        "persona": self.red_persona, "players": self.control,
+                                        "config": dict(self.config)})
+
+    def set_config(self, **kw) -> dict:
+        """Tune the game mid-session. difficulty in {easy,normal,hard}; max_turns 5..50;
+        false_positive_rate 0..0.5. Returns the effective config."""
+        if "difficulty" in kw and kw["difficulty"] in self.BLUE_ACTIONS:
+            self.config["difficulty"] = kw["difficulty"]
+        if "max_turns" in kw:
+            try:
+                self.config["max_turns"] = max(5, min(50, int(kw["max_turns"])))
+            except (TypeError, ValueError):
+                pass
+        if "false_positive_rate" in kw:
+            try:
+                self.config["false_positive_rate"] = max(0.0, min(0.5, float(kw["false_positive_rate"])))
+            except (TypeError, ValueError):
+                pass
+        return dict(self.config)
 
     def set_control(self, side: str, who: str):
         """who = 'auto' (AI/heuristic) or 'human'. A human plays via /api/act."""
@@ -379,9 +400,9 @@ class GameEngine:
                     self._next_side = "blue"
                 else:
                     self._next_side = "red"
-                    if self.round >= self.s.MAX_TURNS:
+                    if self.round >= self.max_turns:
                         await self._game_over(
-                            "blue", f"{self.s.MAX_TURNS} rounds survived — BLUE held the line")
+                            "blue", f"{self.max_turns} rounds survived — BLUE held the line")
                         break
                     self.round += 1
                 await self._between_turns()
@@ -448,14 +469,14 @@ class GameEngine:
         self._patch_used_this_turn = False
 
         await self.bus.emit("turn_start", {"side": side, "round": self.round,
-                                           "max_rounds": self.s.MAX_TURNS})
+                                           "max_rounds": self.max_turns})
         legal = self.legal_red() if side == "red" else self.legal_blue()
         if not legal:
             await self.bus.emit("action_result", {
                 "side": side, "action": "PASS", "args": {}, "success": True,
                 "narration": f"{side.upper()} has no legal moves — passes.", "round": self.round})
             return
-        n_actions = 1 if side == "red" else 2
+        n_actions = 1 if side == "red" else self.blue_action_points
         obs = self.build_observation(side)
         agent = self.agents[side]
         if self.control[side] == "human":
@@ -714,7 +735,7 @@ class GameEngine:
                    "owner": self.users[c.owner].name}
                   for c in self.creds.values() if c.stolen]
         return {"side": "red", "round": self.round,
-                "turns_remaining": self.s.MAX_TURNS - self.round + 1,
+                "turns_remaining": self.max_turns - self.round + 1,
                 "score": {"hosts_owned": len(self._controlled(include_internet=False)),
                           "credentials_stolen": len(stolen)},
                 "hosts": hosts, "stolen_creds": stolen,
@@ -745,7 +766,7 @@ class GameEngine:
                    "alerted": e.alerted}  # NOTE: e.benign is engine-only, never exposed
                   for e in list(self.events)[-EVENT_WINDOW:]]
         return {"side": "blue", "round": self.round,
-                "turns_remaining": self.s.MAX_TURNS - self.round + 1,
+                "turns_remaining": self.max_turns - self.round + 1,
                 "crown_jewel": self.cj,
                 "score": {"estimated_exposure_paths": self.defender_exposure()[0],
                           "exposure_note": "paths to the crown jewel from the internet and "
@@ -1089,6 +1110,18 @@ class GameEngine:
                                           "data_source_name": ev.data_source_name, "alerted": alerted})
         return ev
 
+    # difficulty sets BLUE's action points per turn (defender strength) — a clean knob
+    # that doesn't perturb the seeded dice, so a seed stays comparable across difficulties
+    BLUE_ACTIONS = {"easy": 3, "normal": 2, "hard": 1}
+
+    @property
+    def max_turns(self) -> int:
+        return int(self.config.get("max_turns", self.s.MAX_TURNS))
+
+    @property
+    def blue_action_points(self) -> int:
+        return self.BLUE_ACTIONS.get(self.config.get("difficulty"), 2)
+
     async def _roll_detection(self, host: str, noise: float, action: str):
         if host in self.evasion:
             noise *= EVASION_FACTOR
@@ -1103,7 +1136,7 @@ class GameEngine:
                                     signature=sig, data_source=ds)
 
     async def _maybe_false_positive(self):
-        if self.rng.random() < FALSE_POSITIVE_RATE:
+        if self.rng.random() < self.config.get("false_positive_rate", FALSE_POSITIVE_RATE):
             clean = [h for h in self.hosts.values()
                      if not h.compromised and h.kind != "internet"]
             if clean:

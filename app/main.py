@@ -64,7 +64,8 @@ def _status_payload() -> dict:
             "models": {side: (a.model if a else "heuristic") for side, a in engine.agents.items()},
             "players": engine.control, "available_models": available_models,
             "scenario": engine.scenario,
-            "scenarios": [{"id": k, "label": v["label"], "desc": v["desc"]} for k, v in SCENARIOS.items()]}
+            "scenarios": [{"id": k, "label": v["label"], "desc": v["desc"]} for k, v in SCENARIOS.items()],
+            "config": dict(engine.config)}
 
 
 @asynccontextmanager
@@ -269,6 +270,14 @@ def create_app() -> FastAPI:
     @app.get("/api/cases")
     async def cases_report():
         return {"cases": engine.casebook.public(), "summary": engine.casebook.summary()}
+
+    @app.post("/api/config", dependencies=guarded)
+    async def set_config(request: Request):
+        body = await _body(request)
+        cfg = engine.set_config(**{k: body[k] for k in
+                                   ("difficulty", "max_turns", "false_positive_rate") if k in body})
+        await engine.emit_state()
+        return cfg
 
     @app.get("/api/history")
     async def match_history():

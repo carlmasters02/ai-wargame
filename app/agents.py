@@ -209,7 +209,7 @@ class Agent:
 # ------------------------------------------------------- heuristic policies
 
 def heuristic_choose(engine, side: str, legal: list[ActionSpec], n_actions: int) -> list[ActionSpec]:
-    return _heuristic_red(engine, legal) if side == "red" else _heuristic_blue(engine, legal)
+    return _heuristic_red(engine, legal) if side == "red" else _heuristic_blue(engine, legal, n_actions)
 
 
 def _zone(engine, hid: str) -> int:
@@ -262,11 +262,11 @@ def _heuristic_red(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
     return [legal[0]]
 
 
-def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
+def _heuristic_blue(engine, legal: list[ActionSpec], budget: int = 2) -> list[ActionSpec]:
     picks: list[ActionSpec] = []
 
     def add(a):
-        if a and all(p.description != a.description for p in picks) and len(picks) < 2:
+        if a and all(p.description != a.description for p in picks) and len(picks) < budget:
             if a.action == "PATCH" and any(p.action == "PATCH" for p in picks):
                 return  # one patch per turn
             picks.append(a)
@@ -282,7 +282,7 @@ def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
                         key=lambda a: engine.vulns[a.args["vuln"]].severity, default=None))
     # 2. investigate highest-confidence alerted host
     for al in sorted(engine.alerts, key=lambda a: -a.confidence):
-        if len(picks) >= 2:
+        if len(picks) >= budget:
             break
         add(next((a for a in legal if a.action == "INVESTIGATE" and a.args["host"] == al.host), None))
     # 3. patch highest-severity vuln on an alerted host
@@ -297,12 +297,12 @@ def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
                   and a.args["host"] == engine.cj), None))
     # 6. otherwise patch the global worst vuln on INTERNAL hosts first
     #    (internet-facing kit needs change control — defense in depth)
-    if len(picks) < 2:
+    if len(picks) < budget:
         internal = [a for a in legal if a.action == "PATCH"
                     and engine.hosts[a.args["host"]].zone in ("corp", "servers", "restricted")]
         add(internal[0] if internal else next((a for a in legal if a.action == "PATCH"), None))
     # 7. reactive hunting: sweep the zone of the highest-confidence alert, sometimes
-    if len(picks) < 2 and engine.alerts and engine.rng.random() < 0.5:
+    if len(picks) < budget and engine.alerts and engine.rng.random() < 0.5:
         alert_zones = {engine.hosts[a.host].zone for a in engine.alerts
                        if a.host in engine.hosts}
         hunts = [a for a in legal if a.action == "THREAT_HUNT"
@@ -310,6 +310,6 @@ def _heuristic_blue(engine, legal: list[ActionSpec]) -> list[ActionSpec]:
         if hunts:
             depth = {"restricted": 4, "servers": 3, "corp": 2, "dmz": 1}
             add(max(hunts, key=lambda a: depth.get(a.args["zone"], 0)))
-    if len(picks) < 2 and legal:
+    if len(picks) < budget and legal:
         add(legal[0])
     return picks

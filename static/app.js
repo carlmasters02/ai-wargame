@@ -696,6 +696,10 @@ function applyControl(p) {
     document.getElementById("play-red").value = p.players.red;
     document.getElementById("play-blue").value = p.players.blue;
   }
+  if (p.config) {
+    if (p.config.difficulty) document.getElementById("difficulty").value = p.config.difficulty;
+    if (p.config.max_turns) document.getElementById("max-turns").value = p.config.max_turns;
+  }
 }
 
 const turnState = { side: null, n: 1, picked: [] };
@@ -847,6 +851,10 @@ function initControls() {
     post("/api/control", { side: "red", who: e.target.value });
   document.getElementById("play-blue").onchange = (e) =>
     post("/api/control", { side: "blue", who: e.target.value });
+  document.getElementById("difficulty").onchange = (e) =>
+    post("/api/config", { difficulty: e.target.value });
+  document.getElementById("max-turns").onchange = (e) =>
+    post("/api/config", { max_turns: parseInt(e.target.value) || 20 });
   document.getElementById("turn-submit").onclick = () => {
     if (turnState.picked.length) submitTurn(turnState.picked.slice());
   };

@@ -53,3 +53,9 @@ def test_reset_with_scenario(client):
     assert r.status_code == 200 and r.json()["scenario"] == "ransomware"
     assert client.post("/api/reset", json={"seed": 6, "scenario": "bogus"}).status_code == 400
     client.post("/api/reset", json={"seed": 6, "scenario": "baseline"})
+
+
+def test_config_endpoint(client):
+    r = client.post("/api/config", json={"difficulty": "hard", "max_turns": 15})
+    assert r.status_code == 200 and r.json()["difficulty"] == "hard" and r.json()["max_turns"] == 15
+    client.post("/api/config", json={"difficulty": "normal", "max_turns": 20})

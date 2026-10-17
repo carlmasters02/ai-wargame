@@ -168,6 +168,18 @@ for **CISA KEV** and **ZERO-DAY**. Patched vulns are struck through.
 
 ---
 
+## 4a. Game configuration
+
+Two footer controls tune the match live (`POST /api/config`):
+
+- **Difficulty** sets BLUE's action points per turn — 🟢 Easy (3), 🟡 Normal (2),
+  🔴 Hard (1). It changes defender strength without touching the seeded dice, so a
+  seed stays directly comparable across difficulties (heuristic baseline: RED wins
+  ~4% easy / ~10% normal / ~47% hard on seeds 2000–2099).
+- **Turns** sets the match length (5–50 rounds); more rounds favour the attacker.
+
+Both persist across resets and campaign games.
+
 ## 5. Controls
 
 ### Bottom bar
