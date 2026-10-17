@@ -159,3 +159,40 @@ body {
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: #223050; border-radius: 4px; }
+
+/* ---- ATT&CK heatmap bar (bottom of center pane) ---- */
+#attack-bar {
+  position: absolute; left: 12px; right: 12px; bottom: 10px; z-index: 5;
+  display: flex; align-items: flex-start; gap: 10px;
+  background: rgba(10, 14, 26, 0.82); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; backdrop-filter: blur(4px);
+}
+.ab-title { font-size: 10px; letter-spacing: 0.12em; color: var(--gold); font-weight: 700;
+  padding-top: 3px; white-space: nowrap; }
+#attack-cols { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: flex-start; min-width: 0; }
+.ab-empty { font-size: 11px; color: var(--dim); font-style: italic; padding-top: 2px; }
+.ab-group { display: flex; flex-direction: column; gap: 3px; }
+.ab-tactic { font-size: 9px; letter-spacing: 0.08em; color: var(--dim); text-transform: uppercase; }
+.tech-chip {
+  display: inline-block; font-size: 10px; font-weight: 700; font-family: monospace;
+  padding: 1px 6px; border-radius: 4px; margin-right: 3px; white-space: nowrap;
+}
+.tech-chip.red { background: rgba(255, 45, 85, 0.16); color: #ff5c7c; border: 1px solid rgba(255, 45, 85, 0.4); }
+.tech-chip.blue { background: rgba(59, 157, 255, 0.14); color: #6cb5ff; border: 1px solid rgba(59, 157, 255, 0.4); }
+
+/* ---- host tooltip (force-graph nodeLabel) ---- */
+.graph-tooltip .tt, .tt { text-align: left; }
+.tt { max-width: 340px; font-size: 12px; line-height: 1.45; }
+.tt-head { font-weight: 700; font-size: 13px; margin-bottom: 2px; }
+.tt-sub { color: #9aa7c2; font-size: 11px; margin-bottom: 4px; }
+.tt-vuln { padding: 2px 0; border-top: 1px dashed rgba(120, 140, 180, 0.25); }
+.tt-vuln.patched { opacity: 0.45; text-decoration: line-through; }
+.tt-flag { font-size: 9px; font-weight: 700; padding: 0 5px; border-radius: 3px; margin-left: 4px; }
+.tt-flag.red { background: rgba(255,45,85,.2); color: #ff5c7c; }
+.tt-flag.blue { background: rgba(59,157,255,.2); color: #6cb5ff; }
+.tt-flag.gold { background: rgba(240,180,60,.2); color: var(--gold); }
+.kev-badge {
+  font-size: 9px; font-weight: 800; padding: 0 4px; border-radius: 3px;
+  background: #b8860b; color: #0a0e1a; letter-spacing: 0.04em;
+}
+.kev-badge.zero { background: #ff2d55; color: #fff; }

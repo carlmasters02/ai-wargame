@@ -30,6 +30,10 @@
 
   <section id="center">
     <div id="graph-wrap"><div id="graph"></div></div>
+    <div id="attack-bar">
+      <span class="ab-title">MITRE ATT&amp;CK</span>
+      <div id="attack-cols"><span class="ab-empty">techniques used this match appear here</span></div>
+    </div>
     <div id="view-toggle">
       <button id="view-god" class="toggle active">🌐 GOD VIEW</button>
       <button id="view-red" class="toggle">🥷 RED VIEW</button>
@@ -64,6 +68,8 @@
   <div id="banner-actions">
     <button id="banner-report" class="banner-btn">📋 AFTER-ACTION REPORT</button>
     <button id="banner-timeline" class="banner-btn">🕒 MATCH TIMELINE</button>
+    <button id="banner-nav" class="banner-btn">🗺 ATT&amp;CK LAYER</button>
+    <button id="banner-stix" class="banner-btn">📦 STIX BUNDLE</button>
     <button id="banner-close" class="banner-btn dim">✕ CLOSE</button>
   </div>
 </div>
@@ -71,6 +77,8 @@
 <div id="endgame-dock" class="hidden">
   <button id="dock-report" class="banner-btn">📋 REPORT</button>
   <button id="dock-timeline" class="banner-btn">🕒 TIMELINE</button>
+  <button id="dock-nav" class="banner-btn">🗺 ATT&amp;CK</button>
+  <button id="dock-stix" class="banner-btn">📦 STIX</button>
 </div>
 
 <div id="report-modal" class="hidden">

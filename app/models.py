@@ -38,6 +38,8 @@ class Vuln(BaseModel):
     noise: float             # 0.0-1.0
     patched: bool = False
     zero_day: bool = False
+    epss: float | None = None  # EPSS exploit probability (0-1), from FIRST.org
+    kev: bool = False          # on CISA's Known Exploited Vulnerabilities catalog
 
 
 class Credential(BaseModel):
@@ -94,3 +96,4 @@ class TurnRecord(BaseModel):
     narration: str = ""
     thought: str = ""
     fallback: bool = False
+    techniques: list[str] = []  # MITRE ATT&CK / mitigation IDs for this action

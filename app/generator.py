@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import random
 
+from . import intel
 from .models import Credential, Edge, GraphSpec, Host, User, Vuln
 from .paths import count_viable_paths
 
@@ -105,10 +106,12 @@ def _mk_vuln(rng: random.Random, vid: str, host: str, kind: str, quiet: bool = F
     noise = max(0.05, min(0.90, rng.gauss(0.45, 0.15)))
     if quiet or rng.random() < 0.15:  # a few quiet "gems"
         noise = round(noise * 0.3, 2)
-    return Vuln(
+    v = Vuln(
         id=vid, host=host, cve_label=cve, name=name, severity=sev,
         exploitability=round(exploitability, 2), noise=round(noise, 2),
     )
+    intel.enrich(v)  # attach real-world EPSS/KEV (deterministic committed cache)
+    return v
 
 
 def generate(seed: int) -> GraphSpec:
@@ -210,9 +213,11 @@ def generate(seed: int) -> GraphSpec:
                 v.noise = round(rng.uniform(0.25, 0.45), 2)
             vulns.append(v)
             n += 1
-    # the crown jewel is hard but not impossible
-    vulns.append(Vuln(id=f"V-{n:03d}", host="SKR-DB-PROD", cve_label="CVE-2020-1472",
-                      name="Zerologon", severity=10, exploitability=0.35, noise=0.5))
+    # the crown jewel is hard but not impossible (hand-tuned odds, real intel labels)
+    cj_vuln = Vuln(id=f"V-{n:03d}", host="SKR-DB-PROD", cve_label="CVE-2020-1472",
+                   name="Zerologon", severity=10, exploitability=0.35, noise=0.5)
+    intel.enrich(cj_vuln, blend=False)
+    vulns.append(cj_vuln)
     n += 1
 
     # --- credential-reuse chains (grants target is always a network neighbor) ---

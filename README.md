@@ -47,6 +47,27 @@ so the first turn of a demo is never a cold call.
 - Win conditions: RED wins by exfiltrating the crown jewel; BLUE wins by
   fully evicting RED or surviving `MAX_TURNS` (20) rounds.
 
+## Real-world threat intel
+
+Every CVE in the pool is enriched with **live data**: EPSS exploit probability
+(FIRST.org) and CISA Known-Exploited-Vulnerabilities flags
+(`scripts/fetch_intel.py` → committed cache `data/cve_intel.json`, so games
+stay deterministic and demos work offline). EPSS is blended into exploit
+success odds, shown in host tooltips (hover any node) and in the LLM action
+menus — the agents literally reason over the same intel a real SOC uses.
+25 of the 29 pooled CVEs are on CISA's KEV list.
+
+## MITRE ATT&CK, live and exportable
+
+Every action is tagged with its ATT&CK technique (RED) or mitigation (BLUE) and
+accumulates into a **live ATT&CK heatmap** under the graph. When the match ends,
+export the fight as a real artifact:
+
+- **🗺 ATT&CK LAYER** — Navigator layer JSON (`/api/export/navigator`), imports
+  straight into https://mitre-attack.github.io/attack-navigator/
+- **📦 STIX BUNDLE** — STIX 2.1 bundle (`/api/export/stix`) with attack-pattern
+  objects + external references, importable into TIP tooling
+
 ## Judge controls (bottom bar)
 
 START / PAUSE / STEP, speed slider, **INJECT ZERO-DAY**, **INSIDER THREAT**,
@@ -111,11 +132,15 @@ app/
   report.py     after-action report (LLM with static fallback)
   events.py     WS broadcaster + JSONL match recorder
   replay.py     offline replay server
+  intel.py      EPSS/KEV enrichment (deterministic committed cache)
+  attack_map.py action → MITRE ATT&CK technique/mitigation mapping
+  export.py     ATT&CK Navigator layer + STIX 2.1 bundle builders
 scripts/
   check_models.py   P0 gate: ai& model IDs + Neo4j connectivity
   gen_test.py       P1 gate: 20 seeds × guarantee check (+ Aura write & Cypher cross-check)
   smoke_test.py     P3 gate: full headless heuristic games + BLUE fog-of-war leak test
   find_seed.py      P7: drama-scored seed picker
+  fetch_intel.py    refresh data/cve_intel.json from FIRST.org EPSS + CISA KEV
 ```
 
 Golden seed: **6** — the committed `replays/golden.jsonl` is a full LLM match

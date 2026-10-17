@@ -17,6 +17,8 @@ from .config import settings
 from .db import Mirror, init_driver
 from .engine import GameEngine
 from .events import Broadcaster
+from . import export
+from .intel import intel_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("main")
@@ -139,7 +141,26 @@ def create_app() -> FastAPI:
     @app.get("/api/state")
     async def state():
         return {"state": engine.state, "round": engine.round, "winner": engine.winner,
-                "metrics": engine.compute_metrics()}
+                "metrics": engine.compute_metrics(), "intel": intel_status()}
+
+    # ---- exports (ATT&CK Navigator layer + STIX 2.1 bundle) ----
+    @app.get("/api/export/navigator")
+    async def export_navigator():
+        if not engine.turns:
+            return JSONResponse({"error": "no match data yet"}, status_code=404)
+        layer = export.navigator_layer(engine.turns, engine.spec.seed if engine.spec else 0,
+                                       engine.winner, engine.win_reason)
+        return JSONResponse(layer, headers={
+            "Content-Disposition": "attachment; filename=attack_navigator_layer.json"})
+
+    @app.get("/api/export/stix")
+    async def export_stix():
+        if not engine.turns:
+            return JSONResponse({"error": "no match data yet"}, status_code=404)
+        bundle = export.stix_bundle(engine.turns, engine.spec.seed if engine.spec else 0,
+                                    engine.winner, engine.win_reason)
+        return JSONResponse(bundle, headers={
+            "Content-Disposition": "attachment; filename=match_stix_bundle.json"})
 
     return app
 

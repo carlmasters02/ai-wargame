@@ -13,7 +13,7 @@ import logging
 import random
 from collections import deque
 
-from . import generator, queries
+from . import attack_map, generator, intel, queries
 from .models import ActionSpec, Alert, Credential, GraphSpec, Host, TurnRecord, Vuln
 from .paths import count_viable_paths
 
@@ -130,7 +130,11 @@ class GameEngine:
                 {"id": h.id, "name": h.name, "kind": h.kind, "zone": h.zone,
                  "os": h.os, "criticality": h.criticality, "compromised": h.compromised,
                  "isolated": h.isolated, "honeypot": h.honeypot,
-                 "discovered": h.discovered, "crown": h.id == self.cj}
+                 "discovered": h.discovered, "crown": h.id == self.cj,
+                 "vulns": [{"id": v.id, "cve": v.cve_label, "name": v.name, "sev": v.severity,
+                            "patched": v.patched, "zero_day": v.zero_day,
+                            "epss": v.epss, "kev": v.kev}
+                           for v in self._host_vulns(h.id)]}
                 for h in self.hosts.values()
             ],
             "links": [{"source": e.src, "target": e.dst, "port": e.port,
@@ -305,7 +309,8 @@ class GameEngine:
             rec = await (self._resolve_red(spec) if side == "red" else self._resolve_blue(spec))
             await self.bus.emit("action_result", {
                 "side": side, "action": rec.action, "args": rec.args, "success": rec.success,
-                "narration": rec.narration, "round": self.round})
+                "narration": rec.narration, "round": self.round,
+                "techniques": attack_map.techniques_for(rec.action)})
             await self._log_turn(rec)
             await self._emit_metrics()
             if self.winner:
@@ -324,7 +329,8 @@ class GameEngine:
     def _new_record(self, side, action, args) -> TurnRecord:
         self.action_n += 1
         return TurnRecord(n=self.action_n, round=self.round, side=side,
-                          action=action, args=args, success=False)
+                          action=action, args=args, success=False,
+                          techniques=[t["id"] for t in attack_map.techniques_for(action)])
 
     # ------------------------------------------------------- legal actions
     def legal_red(self) -> list[ActionSpec]:
@@ -345,7 +351,7 @@ class GameEngine:
                         action="EXPLOIT", args={"host": hid, "vuln": v.id},
                         description=f"EXPLOIT {hid} ({t.kind}/{t.zone}, crit {t.criticality}) via "
                                     f"{v.cve_label} {v.name} (sev {v.severity}, "
-                                    f"exploit {v.exploitability}, noise {v.noise})"))
+                                    f"exploit {v.exploitability}, noise {v.noise}){intel.tag(v)}"))
         for c in self.creds.values():
             t = self.hosts[c.grants]
             if c.stolen and not c.rotated and not t.compromised and not t.isolated \
@@ -382,7 +388,7 @@ class GameEngine:
         for v in unpatched:
             acts.append(ActionSpec(
                 action="PATCH", args={"vuln": v.id, "host": v.host},
-                description=f"PATCH {v.cve_label} on {v.host} (sev {v.severity}, {v.name})"))
+                description=f"PATCH {v.cve_label} on {v.host} (sev {v.severity}, {v.name}){intel.tag(v)}"))
         # ISOLATE: alerted or confirmed-compromised hosts
         flagged = {a.host for a in self.alerts}
         flagged |= {h.id for h in self.hosts.values() if h.investigated and h.compromised}
@@ -451,7 +457,7 @@ class GameEngine:
             if h.vulns_revealed or h.compromised:
                 entry["vulns"] = [{"id": v.id, "cve": v.cve_label, "sev": v.severity,
                                    "exploit": v.exploitability, "noise": v.noise,
-                                   "patched": v.patched}
+                                   "patched": v.patched, "epss": v.epss, "kev": v.kev}
                                   for v in self._host_vulns(h.id)]
             entry["neighbors"] = [{"id": n, "kind": self.hosts[n].kind, "zone": self.hosts[n].zone}
                                   for n in self._neighbors(h.id) if self.hosts[n].discovered]
@@ -475,7 +481,8 @@ class GameEngine:
                      "criticality": h.criticality, "isolated": h.isolated,
                      "honeypot": h.honeypot, "investigated": h.investigated,
                      "vulns": [{"id": v.id, "cve": v.cve_label, "sev": v.severity,
-                                "patched": v.patched} for v in self._host_vulns(h.id)]}
+                                "patched": v.patched, "epss": v.epss, "kev": v.kev}
+                               for v in self._host_vulns(h.id)]}
             if h.investigated:
                 entry["confirmed_compromised"] = h.compromised
             hosts.append(entry)

@@ -44,6 +44,7 @@ function initGraph() {
     .backgroundColor("rgba(0,0,0,0)")
     .nodeId("id")
     .nodeCanvasObject(paintNode)
+    .nodeLabel(nodeTooltip)
     .nodePointerAreaPaint((node, color, ctx) => {
       ctx.fillStyle = color;
       ctx.beginPath(); ctx.arc(node.x, node.y, 10, 0, 2 * Math.PI); ctx.fill();
@@ -150,6 +151,31 @@ function paintNode(node, ctx, globalScale) {
   ctx.restore();
 }
 
+// host tooltip: real-world intel per vuln (EPSS exploit probability, CISA KEV)
+function nodeTooltip(node) {
+  const n = state.nodes.get(node.id) || node;
+  const flags = [
+    n.compromised ? '<span class="tt-flag red">COMPROMISED</span>' : "",
+    n.isolated ? '<span class="tt-flag blue">ISOLATED</span>' : "",
+    n.honeypot ? '<span class="tt-flag gold">HONEYPOT</span>' : "",
+    n.crown ? '<span class="tt-flag gold">👑 CROWN JEWEL</span>' : "",
+  ].filter(Boolean).join(" ");
+  const vulns = (n.vulns || []).map((v) => {
+    const intelBits = [
+      v.epss != null ? `EPSS ${(v.epss * 100).toFixed(0)}%` : "",
+      v.kev ? '<span class="kev-badge">CISA KEV</span>' : "",
+      v.zero_day ? '<span class="kev-badge zero">ZERO-DAY</span>' : "",
+    ].filter(Boolean).join(" ");
+    return `<div class="tt-vuln ${v.patched ? "patched" : ""}">
+      <b>${escapeHtml(v.cve)}</b> ${escapeHtml(v.name || "")} · sev ${v.sev} ${intelBits}</div>`;
+  }).join("");
+  return `<div class="tt">
+    <div class="tt-head">${escapeHtml(n.id)} ${flags}</div>
+    <div class="tt-sub">${escapeHtml(n.kind || "")} · ${escapeHtml(n.zone || "")} · ${escapeHtml(n.os || "")} · crit ${n.criticality ?? "-"}</div>
+    ${vulns || '<div class="tt-sub">no known vulns</div>'}
+  </div>`;
+}
+
 function paintLinkOverlay(link, ctx) {
   if (!onShortestPath(link)) return;
   const a = link.source, b = link.target;
@@ -185,6 +211,8 @@ function loadSnapshot(p) {
   matchLog.length = 0;
   lastReport = null;
   gameOverInfo = null;
+  attackState.techniques.clear();
+  renderAttackBar();
   clearFeeds();
   resetSpark();
   applyView();
@@ -229,9 +257,17 @@ function addThought(p) {
 function addResult(p) {
   matchLog.push({ round: p.round, side: p.side, kind: "action",
     action: p.action, success: p.success, text: p.narration });
+  trackTechniques(p.techniques, p.side);
+  if (p.action === "PATCH" && p.success && p.args) {
+    const n = state.nodes.get(p.args.host);
+    const v = n && (n.vulns || []).find((x) => x.id === p.args.vuln);
+    if (v) v.patched = true;
+  }
   const card = pendingCard[p.side];
   const args = Object.entries(p.args || {}).map(([k, v]) => `${k}=${v}`).join(" ");
-  const html = `<div class="action">${p.action} <span style="color:#7d8ba1">${escapeHtml(args)}</span></div>
+  const chips = (p.techniques || []).map((t) =>
+    `<span class="tech-chip ${p.side}" title="${escapeHtml(t.name)}">${escapeHtml(t.id)}</span>`).join("");
+  const html = `<div class="action">${p.action} <span style="color:#7d8ba1">${escapeHtml(args)}</span> ${chips}</div>
     <div class="result ${p.success ? "ok" : "fail"}">${p.success ? "✔" : "✘"} ${escapeHtml(p.narration)}</div>`;
   if (card) {
     card.querySelector(".action").outerHTML = html;
@@ -376,6 +412,57 @@ function openTimeline() {
   }).join("");
 }
 
+// ---------------------------------------------------------------- ATT&CK heatmap
+const attackState = { techniques: new Map() };  // id -> {id, name, tactic, count, side}
+const TACTIC_ORDER = ["Discovery", "Initial Access", "Credential Access", "Defense Evasion",
+  "Lateral Movement", "Exfiltration", "Mitigation", "Deception"];
+
+function trackTechniques(list, side) {
+  for (const t of list || []) {
+    const cur = attackState.techniques.get(t.id) || { ...t, count: 0, side };
+    cur.count += 1;
+    attackState.techniques.set(t.id, cur);
+  }
+  renderAttackBar();
+}
+
+function renderAttackBar() {
+  const box = document.getElementById("attack-cols");
+  if (attackState.techniques.size === 0) {
+    box.innerHTML = '<span class="ab-empty">techniques used this match appear here</span>';
+    return;
+  }
+  const groups = new Map();
+  for (const t of attackState.techniques.values()) {
+    if (!groups.has(t.tactic)) groups.set(t.tactic, []);
+    groups.get(t.tactic).push(t);
+  }
+  const ordered = [...groups.entries()].sort(
+    (a, b) => TACTIC_ORDER.indexOf(a[0]) - TACTIC_ORDER.indexOf(b[0]));
+  box.innerHTML = ordered.map(([tactic, techs]) => `
+    <div class="ab-group">
+      <div class="ab-tactic">${escapeHtml(tactic)}</div>
+      ${techs.map((t) => `<span class="tech-chip ${t.side}" title="${escapeHtml(t.name)}">
+        ${escapeHtml(t.id)}${t.count > 1 ? ` ×${t.count}` : ""}</span>`).join("")}
+    </div>`).join("");
+}
+
+// ---------------------------------------------------------------- exports
+async function downloadExport(url, filename) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    addSystemCard(`⚠ export unavailable (replay/offline mode): ${url}`);
+  }
+}
+
 // ---------------------------------------------------------------- event router
 function handle(type, p) {
   switch (type) {
@@ -455,6 +542,12 @@ function initControls() {
   document.getElementById("banner-timeline").onclick = openTimeline;
   document.getElementById("dock-report").onclick = openReport;
   document.getElementById("dock-timeline").onclick = openTimeline;
+  const navDl = () => downloadExport("/api/export/navigator", "attack_navigator_layer.json");
+  const stixDl = () => downloadExport("/api/export/stix", "match_stix_bundle.json");
+  document.getElementById("banner-nav").onclick = navDl;
+  document.getElementById("banner-stix").onclick = stixDl;
+  document.getElementById("dock-nav").onclick = navDl;
+  document.getElementById("dock-stix").onclick = stixDl;
 }
 
 function setView(v) {
