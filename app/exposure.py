@@ -20,17 +20,21 @@ from copy import deepcopy
 from .paths import count_viable_paths
 
 
-def _count(hosts, edges, vulns, creds, cj) -> int:
-    return count_viable_paths(hosts, edges, vulns, creds, cj, maxlen=8, cap=250)[0]
+def _count(hosts, edges, vulns, creds, cj, potential=False) -> int:
+    return count_viable_paths(hosts, edges, vulns, creds, cj, maxlen=8, cap=250,
+                              potential=potential)[0]
 
 
-def _candidates(hosts, vulns, creds):
-    """Yield (kind, label, apply_fn) for every fix worth evaluating."""
+def _candidates(hosts, vulns, creds, potential=False):
+    """Yield (kind, label, apply_fn) for every fix worth evaluating. In potential mode
+    (static snapshot / identity graph) any unrotated credential is a candidate, since any
+    grant is a reachable hop; otherwise only credentials known to be stolen."""
     host_by = {h.id: h for h in hosts}
     for v in vulns:
         if not v.patched and host_by.get(v.host) and not host_by[v.host].isolated:
             yield ("PATCH", f"Patch {v.cve_label} on {v.host}", ("vuln", v.id))
-    owners = {c.owner for c in creds if c.stolen and not c.rotated}
+    owners = {c.owner for c in creds
+              if not c.rotated and (potential or c.stolen)}
     for owner in sorted(owners):
         yield ("ROTATE_CREDS", f"Rotate credentials for {owner}", ("owner", owner))
     for h in hosts:
@@ -55,13 +59,15 @@ def _apply(target, hosts, vulns, creds):
                 h.compromised = False
 
 
-def analyse(hosts, edges, vulns, creds, cj, top: int = 8) -> dict:
-    base = _count(hosts, edges, vulns, creds, cj)
+def analyse(hosts, edges, vulns, creds, cj, top: int = 8, potential: bool = False) -> dict:
+    # potential=True (gen_mode): count attack paths an attacker COULD take (any credential
+    # grant is a hop) — the right view for a static network snapshot / identity graph.
+    base = _count(hosts, edges, vulns, creds, cj, potential)
     ranked = []
-    for action, label, target in _candidates(hosts, vulns, creds):
+    for action, label, target in _candidates(hosts, vulns, creds, potential):
         h2, v2, c2 = deepcopy(hosts), deepcopy(vulns), deepcopy(creds)
         _apply(target, h2, v2, c2)
-        after = _count(h2, edges, v2, c2, cj)
+        after = _count(h2, edges, v2, c2, cj, potential)
         removed = base - after
         if removed > 0:
             ranked.append({"action": action, "label": label,
@@ -75,10 +81,10 @@ def analyse(hosts, edges, vulns, creds, cj, top: int = 8) -> dict:
     plan, cur = [], base
     while cur > 0:
         best = None
-        for action, label, target in _candidates(h2, v2, c2):
+        for action, label, target in _candidates(h2, v2, c2, potential):
             hh, vv, cc = deepcopy(h2), deepcopy(v2), deepcopy(c2)
             _apply(target, hh, vv, cc)
-            after = _count(hh, edges, vv, cc, cj)
+            after = _count(hh, edges, vv, cc, cj, potential)
             if best is None or after < best[0]:
                 best = (after, action, label, target)
         if best is None or best[0] >= cur:

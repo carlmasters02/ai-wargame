@@ -38,14 +38,16 @@ def _index(hosts, edges, vulns, creds):
     return hmap, vulns_by_host, creds_by_grant, adj
 
 
-def _breachable(hid, hmap, vulns_by_host, creds_by_grant, gen_mode) -> bool:
+def _breachable(hid, hmap, vulns_by_host, creds_by_grant, gen_mode, potential=False) -> bool:
     h = hmap[hid]
     if h.compromised:
         return True
     if any(not v.patched for v in vulns_by_host.get(hid, [])):
         return True
     for c in creds_by_grant.get(hid, []):
-        if gen_mode or (c.stolen and not c.rotated):
+        # gen_mode: any grant. potential: any grant that hasn't been rotated (a snapshot view).
+        # runtime: only a credential the attacker has actually stolen and that isn't rotated.
+        if gen_mode or (potential and not c.rotated) or (c.stolen and not c.rotated):
             return True
     return False
 
@@ -59,12 +61,13 @@ def count_viable_paths(
     maxlen: int = 8,
     cap: int = 250,
     gen_mode: bool = False,
+    potential: bool = False,
 ) -> tuple[int, list[str], bool]:
     """Returns (path_count, shortest_path_ids, capped)."""
     hmap, vbh, cbg, adj = _index(hosts, edges, vulns, creds)
 
     def breachable(hid: str) -> bool:
-        return _breachable(hid, hmap, vbh, cbg, gen_mode)
+        return _breachable(hid, hmap, vbh, cbg, gen_mode, potential)
 
     starts = [
         h.id

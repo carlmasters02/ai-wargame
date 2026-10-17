@@ -562,7 +562,11 @@ the synthetic one. The **⬆ IMPORT** button loads:
 
 - a **CSV asset inventory** (hosts, connections, known CVEs — `examples/sample_network.csv`
   shows the format), or
-- an **Nmap XML** scan (hosts and the services between them).
+- an **Nmap XML** scan (hosts and the services between them), or
+- a **BloodHound-style identity graph** (`examples/sample_bloodhound.json`): sessions
+  and admin rights become credential-reuse edges, so the exposure analysis finds
+  Active-Directory privilege-escalation paths to the crown jewel and tells you which
+  service account to rotate to break them.
 
 Imported networks skip the synthetic path guarantee (a real network is whatever
 it is), an internet beachhead is added automatically, and fog of war is seeded
@@ -580,6 +584,9 @@ isolate/reimage a compromised host) removes **right now**, ranks them, and build
 a greedy **minimal fix plan** that drives exposure toward zero — a prioritised
 remediation backlog. Available any time via `GET /api/exposure`. This is the core
 of a continuous-threat-exposure-management (CTEM) workflow, run on the live graph.
+For an imported static network it uses the *potential* view (any un-rotated credential
+is a reachable hop, the way BloodHound models identity paths); during a live match it
+uses the runtime view (only credentials the attacker has actually stolen count).
 
 ## 15. API reference
 

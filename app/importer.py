@@ -29,7 +29,7 @@ import io
 from defusedxml import ElementTree as ET  # hardened against XXE / billion-laughs
 
 from . import intel
-from .models import Edge, GraphSpec, Host, Vuln
+from .models import Credential, Edge, GraphSpec, Host, User, Vuln
 
 VALID_KINDS = {"internet", "firewall", "webserver", "workstation", "fileserver", "appserver",
                "database", "domain_controller", "backup", "cloud_bucket", "server"}
@@ -52,7 +52,9 @@ def _finalise(hosts, edges, vulns, crown) -> GraphSpec:
     if not any(h.kind == "internet" for h in hosts):
         hosts.insert(0, Host(id="INTERNET", name="INTERNET", kind="internet",
                              zone="internet", criticality=1))
-        perimeter = [h for h in hosts if h.zone in ("dmz", "internet") and h.kind != "internet"]
+        # beachheads: perimeter (dmz) OR workstations (phishing) — the realistic entry points
+        perimeter = [h for h in hosts if (h.zone == "dmz" or h.kind == "workstation")
+                     and h.kind != "internet"]
         for h in (perimeter or [h for h in hosts if h.kind != "internet"][:1]):
             edges.append(Edge(src="INTERNET", dst=h.id))
     vulns = [v for v in vulns if v.host in ids]
@@ -173,3 +175,126 @@ def import_nmap(xml_text: str) -> GraphSpec:
         for i in inner:
             edges.append(Edge(src=d, dst=i))
     return _finalise(hosts, edges, vulns, "")
+
+
+# -------------------------------------------------------- BloodHound (identity paths)
+def _bh_kind(name: str) -> str:
+    n = name.upper()
+    if any(t in n for t in ("DC", "DOMAIN")):
+        return "domain_controller"
+    if any(t in n for t in ("SQL", "DB")):
+        return "database"
+    if any(t in n for t in ("FILE", "FS", "SHARE")):
+        return "fileserver"
+    if any(t in n for t in ("WEB", "WWW", "IIS")):
+        return "webserver"
+    if any(t in n for t in ("WS", "WKS", "PC", "LAPTOP", "DESK")):
+        return "workstation"
+    return "server"
+
+
+def import_bloodhound(text: str) -> GraphSpec:
+    """Import a BloodHound-style identity graph into attacker-reachable paths.
+
+    Models Active Directory privilege escalation the way BloodHound does: a user
+    with a *session* on computer A whose account is *admin to* computer B creates a
+    path A -> B (own A, steal the session's credential, admin onto B). Accepts a
+    simplified combined JSON:
+
+        {"computers": [{"name": "DC01", "crown": false,
+                        "sessions": ["alice"], "admins": ["bob"]}],
+         "users":     [{"name": "alice", "admin_to": ["FILE01", "DC01"]}]}
+
+    and makes a best effort at a SharpHound computers collection (Properties.name +
+    Sessions/LocalAdmins). Unknown fields are ignored.
+    """
+    import json
+
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        raise ImportError(f"invalid BloodHound JSON: {e}")
+    if not isinstance(data, dict):
+        raise ImportError("BloodHound JSON must be an object")
+
+    computers = data.get("computers") or data.get("data") or []
+    users_raw = data.get("users") or []
+    # user -> set of computers they are admin to
+    admin_to: dict[str, set[str]] = {}
+    for u in users_raw:
+        name = (u.get("name") or u.get("Properties", {}).get("name") or "").split("@")[0].upper()
+        if name:
+            admin_to.setdefault(name, set()).update(
+                c.split("@")[0].split(".")[0].upper() for c in (u.get("admin_to") or []))
+
+    hosts: list[Host] = []
+    id_vulns: list[Vuln] = []
+    sessions: dict[str, list[str]] = {}   # computer -> users with a session there
+    local_admins: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    crown = ""
+
+    def _short(n):
+        return str(n).split("@")[0].split(".")[0].upper()
+
+    for c in computers:
+        name = c.get("name") or c.get("Properties", {}).get("name") or c.get("ObjectIdentifier")
+        if not name:
+            continue
+        cid = _short(name)
+        if cid in seen:
+            continue
+        seen.add(cid)
+        kind = _bh_kind(cid)
+        crit = {"domain_controller": 9, "database": 8, "fileserver": 7}.get(kind, 4)
+        zone = "corp" if kind == "workstation" else "servers"
+        hosts.append(Host(id=cid, name=cid, kind=kind, zone=zone, criticality=crit))
+        if kind == "workstation":
+            n_v = len(id_vulns)
+            id_vulns.append(Vuln(id=f"V-BH-PHISH-{n_v:03d}", host=cid, cve_label="T1566",
+                                 name="Phishing / endpoint initial access", severity=6,
+                                 exploitability=0.6, noise=0.3))
+        if c.get("crown"):
+            crown = cid
+        sess = c.get("sessions")
+        if sess is None:
+            sess = [s.get("UserName") or s.get("UserSID") for s in
+                    (c.get("Sessions", {}).get("Results") or [])]
+        sessions[cid] = [_short(s) for s in sess if s]
+        adm = c.get("admins")
+        if adm is None:
+            adm = [a.get("ObjectIdentifier") for a in (c.get("LocalAdmins", {}).get("Results") or [])]
+        local_admins[cid] = [_short(a) for a in adm if a]
+
+    if not hosts:
+        raise ImportError("no computers found in BloodHound export")
+
+    host_ids = {h.id for h in hosts}
+    edges: list[Edge] = []
+    creds: list[Credential] = []
+    pair_seen: set[tuple[str, str]] = set()
+    n = 0
+    # identity edges: a session user who can admin another box -> reachable credential path
+    for comp, users in sessions.items():
+        for user in users:
+            for target in sorted(admin_to.get(user, set())):
+                if target in host_ids and target != comp and (comp, target) not in pair_seen:
+                    pair_seen.add((comp, target))
+                    edges.append(Edge(src=comp, dst=target, port=445, protocol="smb"))
+                    n += 1
+                    creds.append(Credential(id=f"C-BH-{n:03d}", kind="session",
+                                            owner=user, stored_on=comp, grants=target))
+    # local-admin edges without a session still imply reachability (lateral surface)
+    for comp, admins in local_admins.items():
+        for user in admins:
+            for target in sorted(admin_to.get(user, set())):
+                if target in host_ids and target != comp and (comp, target) not in pair_seen:
+                    pair_seen.add((comp, target))
+                    edges.append(Edge(src=comp, dst=target, port=445, protocol="smb"))
+
+    spec = _finalise(hosts, edges, id_vulns, crown)
+    # attach identity credentials + the users that own them
+    spec.creds = creds
+    owners = {c.owner for c in creds}
+    spec.users = [User(id=u, name=u, role="AD account", privileged=True) for u in sorted(owners)]
+    return spec

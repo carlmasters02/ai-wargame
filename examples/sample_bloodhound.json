@@ -1,0 +1,18 @@
+{
+  "_comment": "Simplified BloodHound-style identity graph. sessions = who is logged in; admins = local admins; admin_to = computers a user can administer.",
+  "computers": [
+    {"name": "WKS-ALICE",  "sessions": ["ALICE"], "admins": ["HELPDESK"]},
+    {"name": "WKS-BOB",    "sessions": ["BOB"],   "admins": ["HELPDESK"]},
+    {"name": "FILE01",     "sessions": ["SVC-BACKUP"], "admins": ["BOB"]},
+    {"name": "SQL01",      "sessions": ["SVC-SQL"], "admins": ["SVC-BACKUP"]},
+    {"name": "DC01",       "sessions": ["ADMIN"],  "admins": ["SVC-SQL"]},
+    {"name": "CROWN-DB",   "crown": true, "sessions": [], "admins": ["ADMIN"]}
+  ],
+  "users": [
+    {"name": "HELPDESK",   "admin_to": ["WKS-ALICE", "WKS-BOB"]},
+    {"name": "BOB",        "admin_to": ["FILE01"]},
+    {"name": "SVC-BACKUP", "admin_to": ["SQL01"]},
+    {"name": "SVC-SQL",    "admin_to": ["DC01"]},
+    {"name": "ADMIN",      "admin_to": ["CROWN-DB", "DC01"]}
+  ]
+}

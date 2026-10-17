@@ -1207,10 +1207,15 @@ class GameEngine:
             self.bus.stop_recording()
 
     def exposure_analysis(self, top: int = 8) -> dict:
-        """Prioritised remediation: which fixes remove the most attack paths right now."""
+        """Prioritised remediation: which fixes remove the most attack paths.
+
+        For an imported network (a static snapshot) use the POTENTIAL view — any
+        credential grant is a reachable hop, as BloodHound shows identity paths.
+        For a live match use the runtime view (only stolen credentials count)."""
+        potential = bool(self.spec and self.spec.seed == -1)
         return exposure.analyse(list(self.hosts.values()), self.edges,
                                 list(self.vulns.values()), list(self.creds.values()),
-                                self.cj, top=top)
+                                self.cj, top=top, potential=potential)
 
     def scorecard(self) -> dict:
         """SOC-style scorecard for the match (the model-evaluation metrics)."""

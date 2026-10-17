@@ -65,3 +65,39 @@ def test_nmap_import_basic():
     ids = {h.id for h in spec.hosts}
     assert "10.0.0.5" in ids and "10.0.0.9" in ids
     assert any(h.kind == "database" for h in spec.hosts)
+
+
+BH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                  "examples", "sample_bloodhound.json")
+
+
+def test_bloodhound_builds_identity_credential_chain():
+    spec = importer.import_bloodhound(open(BH).read())
+    assert spec.crown_jewel == "CROWN-DB"
+    # the privilege-escalation chain WKS-BOB -> FILE01 -> SQL01 -> DC01 -> CROWN-DB
+    grants = {(c.stored_on, c.grants) for c in spec.creds}
+    assert ("WKS-BOB", "FILE01") in grants and ("DC01", "CROWN-DB") in grants
+    assert all(c.kind == "session" for c in spec.creds)
+    # workstations get a phishing initial-access surface
+    assert any(v.cve_label == "T1566" for v in spec.vulns)
+
+
+def test_bloodhound_exposure_finds_identity_fixes(make_engine):
+    async def go():
+        eng, _ = make_engine()
+        spec = importer.import_bloodhound(open(BH).read())
+        await eng.load_network(spec)
+        rep = eng.exposure_analysis()   # imported -> potential (BloodHound) view
+        assert rep["current_exposure"] > 0
+        actions = {f["action"] for f in rep["top_fixes"]}
+        # both patching the entry and rotating a chain credential should break the path
+        assert "ROTATE_CREDS" in actions and "PATCH" in actions
+    run(go())
+
+
+def test_bad_bloodhound_json_raises():
+    import pytest as _pt
+    with _pt.raises(importer.ImportError):
+        importer.import_bloodhound("{ not json")
+    with _pt.raises(importer.ImportError):
+        importer.import_bloodhound('{"computers": []}')

@@ -185,7 +185,12 @@ def create_app() -> FastAPI:
         if len(content) > 2_000_000:
             return JSONResponse({"error": "import too large (max 2 MB)"}, status_code=413)
         try:
-            spec = importer.import_nmap(content) if fmt == "nmap" else importer.import_csv(content)
+            if fmt == "nmap":
+                spec = importer.import_nmap(content)
+            elif fmt in ("bloodhound", "bh", "json"):
+                spec = importer.import_bloodhound(content)
+            else:
+                spec = importer.import_csv(content)
         except importer.ImportError as e:
             return JSONResponse({"error": f"import failed: {e}"}, status_code=400)
         await engine.load_network(spec)

@@ -50,3 +50,19 @@ def test_engine_exposure_endpoint(make_engine):
         rep = eng.exposure_analysis()
         assert rep["current_exposure"] > 0 and rep["top_fixes"]
     run(go())
+
+
+def test_potential_vs_runtime_credential_semantics():
+    from app.models import Credential, Edge, Host, Vuln
+    hosts = [Host(id="I", name="I", kind="internet", zone="internet", compromised=True),
+             Host(id="A", name="A", kind="workstation", zone="corp"),
+             Host(id="J", name="J", kind="database", zone="restricted", criticality=10)]
+    edges = [Edge(src="I", dst="A"), Edge(src="A", dst="J")]
+    vulns = [Vuln(id="vA", host="A", cve_label="X", name="x", severity=6, exploitability=.5, noise=.2)]
+    cred = Credential(id="c", kind="session", owner="svc", stored_on="A", grants="J")  # not stolen
+    # runtime: J unreachable (cred not stolen); potential: J reachable (standing access)
+    assert exposure.analyse(hosts, edges, vulns, [cred], "J", potential=False)["current_exposure"] == 0
+    assert exposure.analyse(hosts, edges, vulns, [cred], "J", potential=True)["current_exposure"] == 1
+    # rotating the credential removes the potential path
+    cred.rotated = True
+    assert exposure.analyse(hosts, edges, vulns, [cred], "J", potential=True)["current_exposure"] == 0

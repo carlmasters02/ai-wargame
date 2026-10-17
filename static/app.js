@@ -897,7 +897,8 @@ async function importNetwork(e) {
   e.target.value = "";  // allow re-importing the same file
   if (!file) return;
   const content = await file.text();
-  const fmt = file.name.toLowerCase().endsWith(".xml") ? "nmap" : "csv";
+  const nm = file.name.toLowerCase();
+  const fmt = nm.endsWith(".xml") ? "nmap" : nm.endsWith(".json") ? "bloodhound" : "csv";
   const r = await post("/api/import", { format: fmt, content });
   if (!r) return;
   const d = await r.json().catch(() => ({}));
