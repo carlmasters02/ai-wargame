@@ -312,7 +312,7 @@ function addResult(p) {
   const args = Object.entries(p.args || {}).map(([k, v]) => `${k}=${v}`).join(" ");
   const chips = (p.techniques || []).map((t) =>
     `<span class="tech-chip ${p.side}" title="${escapeHtml(t.name)}">${escapeHtml(t.id)}</span>`).join("");
-  const html = `<div class="action">${p.action} <span style="color:#7d8ba1">${escapeHtml(args)}</span> ${chips}</div>
+  const html = `<div class="action">${escapeHtml(p.action)} <span style="color:#7d8ba1">${escapeHtml(args)}</span> ${chips}</div>
     <div class="result ${p.success ? "ok" : "fail"}">${p.success ? "✔" : "✘"} ${escapeHtml(p.narration)}</div>`;
   if (card) {  // BLUE has 2 actions per turn: append each in order
     const pending = card.querySelector(".pending");
@@ -478,8 +478,8 @@ function usd(n) { return n == null ? "–" : "$" + Math.round(n).toLocaleString(
 
 function openExecReport() {
   // open the printable executive briefing in a new tab (print -> PDF from there)
-  const url = "/api/report/executive" + (controlToken ? `?token=${encodeURIComponent(controlToken)}` : "");
-  window.open(url, "_blank");
+  // read-only endpoint: never put the control token in a URL (logs, history)
+  window.open("/api/report/executive", "_blank", "noopener");
 }
 
 function openScorecard() {
@@ -582,7 +582,7 @@ function openTimeline() {
   body.innerHTML = matchLog.map((e) => {
     const icon = { action: e.success ? "✔" : "✘", alert: "⚠", intervention: "⚖", end: "🏁" }[e.kind] || "•";
     const cls = e.kind === "action" ? (e.success ? "ok" : "fail") : "";
-    const label = e.kind === "action" ? `<b>${e.action}</b> ` : "";
+    const label = e.kind === "action" ? `<b>${escapeHtml(e.action)}</b> ` : "";
     return `<div class="tl-row">
       <span class="tl-round">${e.round ? "R" + e.round : ""}</span>
       <span class="tl-side ${e.side}">${e.side.toUpperCase()}</span>
@@ -766,7 +766,7 @@ function fillScenarios(list, current) {
   if (!sel || (sel.dataset.filled && !list.length)) return;
   if (list.length) {
     sel.innerHTML = list.map((s) =>
-      `<option value="${s.id}" title="${escapeHtml(s.desc)}">${escapeHtml(s.label)}</option>`).join("");
+      `<option value="${escapeHtml(s.id)}" title="${escapeHtml(s.desc)}">${escapeHtml(s.label)}</option>`).join("");
     sel.dataset.filled = "1";
   }
   if (current) sel.value = current;
@@ -789,11 +789,23 @@ function fillModelSelects(models, current) {
 }
 
 // ---------------------------------------------------------------- controls
-// optional control token (server WARGAME_TOKEN): pass ?token=... once, kept for the tab
+// optional control token (server WARGAME_TOKEN): open the page once with #token=...
+// (a fragment never reaches the server or its logs; ?token= also works), kept for the tab
 const controlToken = (() => {
-  const fromUrl = new URLSearchParams(location.search).get("token");
+  const fromUrl = new URLSearchParams(location.hash.slice(1)).get("token")
+    || new URLSearchParams(location.search).get("token");
   try {
     if (fromUrl) sessionStorage.setItem("wargame_token", fromUrl);
+  } catch (_) { /* storage blocked: token lives only in this page */ }
+  if (fromUrl) {  // drop it from the address bar so it doesn't linger in history/screenshots
+    const u = new URL(location.href);
+    u.searchParams.delete("token");
+    const h = new URLSearchParams(u.hash.slice(1));
+    h.delete("token");
+    u.hash = h.toString();
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+  try {
     return fromUrl || sessionStorage.getItem("wargame_token") || "";
   } catch (_) { return fromUrl || ""; }
 })();
@@ -806,7 +818,7 @@ async function post(url, body) {
     const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body || {}) });
     if (r.status === 401 && !lockedWarned) {
       lockedWarned = true;
-      addSystemCard("🔒 Controls are locked on this server — open the page with ?token=<WARGAME_TOKEN>", "system");
+      addSystemCard("🔒 Controls are locked on this server — open the page with #token=<WARGAME_TOKEN>", "system");
     }
     return r;
   } catch (e) { console.warn(url, e); }
@@ -996,10 +1008,10 @@ async function openHistory() {
     const rows = (d.matches || []).map((m) => `<tr>
       <td class="h-when">${escapeHtml((m.ts||"").replace("T"," ").replace("Z",""))}</td>
       <td>${escapeHtml(m.scenario||"")}</td>
-      <td class="mono">${m.seed ?? "–"}</td>
+      <td class="mono">${escapeHtml(m.seed ?? "–")}</td>
       <td style="color:${m.winner==="red"?"#ff5c7c":"#6cb5ff"}">${(m.winner||"–").toUpperCase()}</td>
       <td class="mono">${escapeHtml(m.red_model||"")} vs ${escapeHtml(m.blue_model||"")}</td>
-      <td class="num">${m.blue_grade}·${m.blue_score}</td>
+      <td class="num">${escapeHtml(m.blue_grade)}·${escapeHtml(m.blue_score)}</td>
       <td class="num">${m.business_cost_usd!=null?"$"+Math.round(m.business_cost_usd).toLocaleString():"–"}</td>
     </tr>`).join("");
     body.innerHTML = rows ? `<table class="hist-table">
