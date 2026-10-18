@@ -8,7 +8,8 @@ vulnerabilities in it are taken seriously.
 
 Please **don't open a public issue** for a security problem. Report it privately
 through GitHub instead:
-[**Report a vulnerability**](https://github.com/carlmasters02/ai-wargame/security/advisories/new).
+[**Report a vulnerability**](https://github.com/carlmasters02/ai-wargame/security/advisories/new),
+or by email to **carl.masters.dev@protonmail.com**.
 
 Include what you found, how to reproduce it (a request, payload or import file is
 ideal), and the impact you expect. This is a personal project maintained on a
