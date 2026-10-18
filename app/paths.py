@@ -62,8 +62,13 @@ def count_viable_paths(
     cap: int = 250,
     gen_mode: bool = False,
     potential: bool = False,
+    budget: int = 50_000,
 ) -> tuple[int, list[str], bool]:
-    """Returns (path_count, shortest_path_ids, capped)."""
+    """Returns (path_count, shortest_path_ids, capped).
+
+    `budget` bounds DFS expansions: simple-path enumeration is exponential on dense
+    graphs (an imported mesh), so past the budget the count stops and is reported as
+    capped (a lower bound). Generated networks need well under 1% of it."""
     hmap, vbh, cbg, adj = _index(hosts, edges, vulns, creds)
 
     def breachable(hid: str) -> bool:
@@ -102,10 +107,14 @@ def count_viable_paths(
     # --- count all simple viable paths (DFS, capped) ---
     count = 0
     capped = False
+    expanded = 0
     for s in starts:
         stack = [(s, (s,))]
         while stack:
             node, path = stack.pop()
+            expanded += 1
+            if expanded > budget:
+                return count, shortest, True
             if len(path) - 1 >= maxlen:
                 continue
             for nxt in adj.get(node, []):

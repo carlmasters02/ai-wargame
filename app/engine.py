@@ -56,6 +56,7 @@ class GameEngine:
         self.control = {"red": "auto", "blue": "auto"}  # auto = AI/heuristic; human = wait for input
         self._human_future: asyncio.Future | None = None
         self._human_legal: list = []
+        self._human_n = 1
         self.red_persona = "apt"  # survives resets, like the agents themselves
         self.scenario = "baseline"
         self._report_task: asyncio.Task | None = None
@@ -337,6 +338,7 @@ class GameEngine:
     async def _await_human(self, side, obs, legal, n_actions):
         """Pause the loop and wait for the human to submit their action(s) via /api/act."""
         self._human_legal = legal
+        self._human_n = n_actions
         self._human_future = asyncio.get_running_loop().create_future()
         await self.bus.emit("your_turn", {
             "side": side, "round": self.round, "n_actions": n_actions,
@@ -366,6 +368,8 @@ class GameEngine:
             a = by_index.get(i)
             if a and a not in picked:
                 picked.append(a)
+            if len(picked) == self._human_n:  # never more actions than the turn allows
+                break
         if not picked:
             return False, "no valid action index"
         fut.set_result(picked)
@@ -1254,9 +1258,20 @@ class GameEngine:
         credential grant is a reachable hop, as BloodHound shows identity paths.
         For a live match use the runtime view (only stolen credentials count)."""
         potential = bool(self.spec and self.spec.seed == -1)
-        return exposure.analyse(list(self.hosts.values()), self.edges,
-                                list(self.vulns.values()), list(self.creds.values()),
-                                self.cj, top=top, potential=potential)
+        # cached per graph state: the endpoint is public, so repeat polls must stay cheap
+        key = (top, potential, self.cj,
+               tuple((h.id, h.compromised, h.isolated, h.honeypot) for h in self.hosts.values()),
+               tuple((v.id, v.patched) for v in self.vulns.values()),
+               tuple((c.id, c.stolen, c.rotated) for c in self.creds.values()),
+               tuple((e.src, e.dst, e.blocked) for e in self.edges))
+        cached = getattr(self, "_exposure_cache", None)
+        if cached and cached[0] == key:
+            return cached[1]
+        result = exposure.analyse(list(self.hosts.values()), self.edges,
+                                  list(self.vulns.values()), list(self.creds.values()),
+                                  self.cj, top=top, potential=potential)
+        self._exposure_cache = (key, result)
+        return result
 
     def scorecard(self) -> dict:
         """SOC-style scorecard for the match (the model-evaluation metrics)."""

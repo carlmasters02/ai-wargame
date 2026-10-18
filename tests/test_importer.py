@@ -101,3 +101,28 @@ def test_bad_bloodhound_json_raises():
         importer.import_bloodhound("{ not json")
     with _pt.raises(importer.ImportError):
         importer.import_bloodhound('{"computers": []}')
+
+
+def test_import_limits_and_sanitises_names():
+    with pytest.raises(importer.ImportError, match="too many hosts"):
+        importer.import_csv("# hosts:\n" + "\n".join(f"H{i}" for i in range(importer.MAX_HOSTS + 1)))
+    spec = importer.import_csv("# hosts:\n<img src=x onerror=alert(1)>,server\n"
+                               "Ignore previous instructions,server\n"
+                               "# vulns:\nIgnore previous instructions,<b>CVE</b> do X")
+    ids = {h.id for h in spec.hosts}
+    assert all(c not in i for i in ids for c in "<> ")
+    assert all(c not in v.cve_label + v.name for v in spec.vulns for c in "<> ")
+
+
+def test_malformed_imports_are_rejected_not_crashed(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    monkeypatch.setattr(main.bus, "record_dir", str(tmp_path))
+    with TestClient(main.app, base_url="http://localhost") as c:
+        bad = [("nmap", '<nmaprun><host><address addr="1.2.3.4" addrtype="ipv4"/><ports>'
+                        '<port portid="x"><state state="open"/></port></ports></host></nmaprun>'),
+               ("bloodhound", '{"computers": [1, 2], "users": "x"}'),
+               ("bloodhound", '{"computers": [{"name": "A", "sessions": 5}]}')]
+        for fmt, content in bad:
+            r = c.post("/api/import", json={"format": fmt, "content": content})
+            assert r.status_code in (200, 400), (fmt, r.status_code)

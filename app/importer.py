@@ -25,7 +25,7 @@ CSV format (one section per block, blank-line separated, '#'-comments ignored):
 from __future__ import annotations
 
 import csv
-import io
+import re
 from defusedxml import ElementTree as ET  # hardened against XXE / billion-laughs
 
 from . import intel
@@ -35,14 +35,39 @@ VALID_KINDS = {"internet", "firewall", "webserver", "workstation", "fileserver",
                "database", "domain_controller", "backup", "cloud_bucket", "server"}
 VALID_ZONES = {"internet", "dmz", "corp", "servers", "restricted"}
 
+# Size limits: imports are untrusted and every host/edge feeds per-turn path analysis.
+MAX_HOSTS = 250
+MAX_EDGES = 20_000
+MAX_VULNS = 2_000
+_UNSAFE = re.compile(r"[^A-Za-z0-9._:@-]")
+
+
+def _ident(raw, limit: int = 64) -> str:
+    """Imported names reach the UI, the reports and the LLM prompts: keep them short and
+    to a conservative charset so an import can't smuggle markup or prompt text."""
+    return _UNSAFE.sub("_", str(raw).strip())[:limit]
+
+
+def _check(items, limit: int, what: str) -> None:
+    if len(items) > limit:
+        raise ImportError(f"too many {what} (max {limit})")
+
 
 class ImportError(ValueError):
     pass
 
 
 def _finalise(hosts, edges, vulns, crown) -> GraphSpec:
+    unique: dict[str, Host] = {}
+    for h in hosts:
+        if h.id:
+            unique.setdefault(h.id, h)  # first definition of a duplicated id wins
+    hosts = list(unique.values())
     if not hosts:
         raise ImportError("no hosts found")
+    _check(hosts, MAX_HOSTS, "hosts")
+    _check(edges, MAX_EDGES, "edges")
+    _check(vulns, MAX_VULNS, "vulnerabilities")
     ids = {h.id for h in hosts}
     if crown not in ids:
         # default crown jewel: highest-criticality host
@@ -96,7 +121,7 @@ def import_csv(text: str) -> GraphSpec:
         cells = next(csv.reader([line]))
         cells = [c.strip() for c in cells]
         if section == "hosts":
-            hid = cells[0]
+            hid = _ident(cells[0])
             kind = (cells[1] if len(cells) > 1 and cells[1] else "server").lower()
             if kind not in VALID_KINDS:
                 kind = "server"
@@ -108,8 +133,10 @@ def import_csv(text: str) -> GraphSpec:
                               criticality=max(1, min(10, crit))))
             if len(cells) > 4 and cells[4].lower() in ("yes", "true", "crown", "1"):
                 crown = hid
+            _check(hosts, MAX_HOSTS, "hosts")
         elif section == "edges" and len(cells) >= 2:
-            edges.append(Edge(src=cells[0], dst=cells[1]))
+            edges.append(Edge(src=_ident(cells[0]), dst=_ident(cells[1])))
+            _check(edges, MAX_EDGES, "edges")
         elif section == "vulns" and len(cells) >= 2:
             n += 1
             sev = int(cells[2]) if len(cells) > 2 and cells[2].isdigit() else 7
@@ -117,15 +144,24 @@ def import_csv(text: str) -> GraphSpec:
                 expl = float(cells[3]) if len(cells) > 3 and cells[3] else sev / 14.0
             except ValueError:
                 expl = sev / 14.0
-            vulns.append(Vuln(id=f"V-IMP-{n:03d}", host=cells[0], cve_label=cells[1],
-                              name=cells[1], severity=max(1, min(10, sev)),
+            label = _ident(cells[1], 40)
+            vulns.append(Vuln(id=f"V-IMP-{n:03d}", host=_ident(cells[0]), cve_label=label,
+                              name=label, severity=max(1, min(10, sev)),
                               exploitability=round(max(0.05, min(0.95, expl)), 2), noise=0.4))
+            _check(vulns, MAX_VULNS, "vulnerabilities")
     if not any(s for s in (hosts,)):
         raise ImportError("CSV had no 'hosts:' section")
     return _finalise(hosts, edges, vulns, crown)
 
 
 _ZONE_BY_PORTHINT = {443: "dmz", 80: "dmz", 25: "dmz"}
+
+
+def _port(p) -> int | None:
+    try:
+        return int(p.get("portid"))
+    except (TypeError, ValueError):
+        return None
 
 
 def import_nmap(xml_text: str) -> GraphSpec:
@@ -145,11 +181,11 @@ def import_nmap(xml_text: str) -> GraphSpec:
         addr = next((a.get("addr") for a in h.findall("address")
                      if a.get("addrtype") in ("ipv4", "ipv6")), None)
         name_el = h.find("hostnames/hostname")
-        hid = (name_el.get("name") if name_el is not None else None) or addr
+        hid = _ident((name_el.get("name") if name_el is not None else None) or addr or "")
         if not hid:
             continue
-        ports = h.findall("ports/port")
-        open_ports = [int(p.get("portid")) for p in ports
+        ports = [p for p in h.findall("ports/port") if _port(p) is not None]
+        open_ports = [_port(p) for p in ports
                       if (p.find("state") is not None and p.find("state").get("state") == "open")]
         zone = "dmz" if any(p in open_ports for p in (80, 443, 25)) else "corp"
         kind = ("webserver" if any(p in open_ports for p in (80, 443)) else
@@ -157,6 +193,7 @@ def import_nmap(xml_text: str) -> GraphSpec:
                 "domain_controller" if 88 in open_ports else "server")
         crit = 8 if kind in ("database", "domain_controller") else 4
         hosts.append(Host(id=hid, name=hid, kind=kind, zone=zone, criticality=crit))
+        _check(hosts, MAX_HOSTS, "hosts")
         host_ids.append(hid)
         for p in ports:
             svc = p.find("service")
@@ -165,12 +202,14 @@ def import_nmap(xml_text: str) -> GraphSpec:
                 # a reachable service is a potential exploitation surface
                 n += 1
                 vulns.append(Vuln(id=f"V-IMP-{n:03d}", host=hid,
-                                  cve_label=f"SERVICE-{p.get('portid')}",
-                                  name=f"{svc.get('name', 'service')} on port {p.get('portid')}",
+                                  cve_label=f"SERVICE-{_port(p)}",
+                                  name=f"{_ident(svc.get('name', 'service'), 32)} on port {_port(p)}",
                                   severity=6, exploitability=0.4, noise=0.4))
+                _check(vulns, MAX_VULNS, "vulnerabilities")
     # Nmap gives no topology; wire a flat reachable mesh from the perimeter inward
     dmz = [h.id for h in hosts if h.zone == "dmz"]
     inner = [h.id for h in hosts if h.zone != "dmz"]
+    _check(range(len(dmz) * len(inner)), MAX_EDGES, "edges")
     for d in dmz:
         for i in inner:
             edges.append(Edge(src=d, dst=i))
@@ -222,10 +261,11 @@ def import_bloodhound(text: str) -> GraphSpec:
     # user -> set of computers they are admin to
     admin_to: dict[str, set[str]] = {}
     for u in users_raw:
-        name = (u.get("name") or u.get("Properties", {}).get("name") or "").split("@")[0].upper()
+        name = _ident(str(u.get("name") or u.get("Properties", {}).get("name") or "")
+                      .split("@")[0].upper())
         if name:
             admin_to.setdefault(name, set()).update(
-                c.split("@")[0].split(".")[0].upper() for c in (u.get("admin_to") or []))
+                _ident(str(c).split("@")[0].split(".")[0].upper()) for c in (u.get("admin_to") or []))
 
     hosts: list[Host] = []
     id_vulns: list[Vuln] = []
@@ -235,16 +275,17 @@ def import_bloodhound(text: str) -> GraphSpec:
     crown = ""
 
     def _short(n):
-        return str(n).split("@")[0].split(".")[0].upper()
+        return _ident(str(n).split("@")[0].split(".")[0].upper())
 
     for c in computers:
         name = c.get("name") or c.get("Properties", {}).get("name") or c.get("ObjectIdentifier")
         if not name:
             continue
         cid = _short(name)
-        if cid in seen:
+        if not cid or cid in seen:
             continue
         seen.add(cid)
+        _check(seen, MAX_HOSTS, "computers")
         kind = _bh_kind(cid)
         crit = {"domain_controller": 9, "database": 8, "fileserver": 7}.get(kind, 4)
         zone = "corp" if kind == "workstation" else "servers"
@@ -281,6 +322,7 @@ def import_bloodhound(text: str) -> GraphSpec:
                 if target in host_ids and target != comp and (comp, target) not in pair_seen:
                     pair_seen.add((comp, target))
                     edges.append(Edge(src=comp, dst=target, port=445, protocol="smb"))
+                    _check(edges, MAX_EDGES, "edges")
                     n += 1
                     creds.append(Credential(id=f"C-BH-{n:03d}", kind="session",
                                             owner=user, stored_on=comp, grants=target))

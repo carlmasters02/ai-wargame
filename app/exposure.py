@@ -19,10 +19,15 @@ from copy import deepcopy
 
 from .paths import count_viable_paths
 
+# Work bounds: every candidate fix costs one path count, so a large imported network
+# could otherwise pin the CPU. Generated networks stay far below both.
+COUNT_BUDGET = 5_000      # DFS expansions per path count
+MAX_EVALS = 150           # path counts per analysis (normal play peaks ~75)
+
 
 def _count(hosts, edges, vulns, creds, cj, potential=False) -> int:
     return count_viable_paths(hosts, edges, vulns, creds, cj, maxlen=8, cap=250,
-                              potential=potential)[0]
+                              potential=potential, budget=COUNT_BUDGET)[0]
 
 
 def _candidates(hosts, vulns, creds, potential=False):
@@ -63,8 +68,12 @@ def analyse(hosts, edges, vulns, creds, cj, top: int = 8, potential: bool = Fals
     # potential=True (gen_mode): count attack paths an attacker COULD take (any credential
     # grant is a hop) — the right view for a static network snapshot / identity graph.
     base = _count(hosts, edges, vulns, creds, cj, potential)
+    evals = 1
     ranked = []
     for action, label, target in _candidates(hosts, vulns, creds, potential):
+        if evals >= MAX_EVALS:
+            break
+        evals += 1
         h2, v2, c2 = deepcopy(hosts), deepcopy(vulns), deepcopy(creds)
         _apply(target, h2, v2, c2)
         after = _count(h2, edges, v2, c2, cj, potential)
@@ -82,6 +91,9 @@ def analyse(hosts, edges, vulns, creds, cj, top: int = 8, potential: bool = Fals
     while cur > 0:
         best = None
         for action, label, target in _candidates(h2, v2, c2, potential):
+            if evals >= MAX_EVALS:
+                break
+            evals += 1
             hh, vv, cc = deepcopy(h2), deepcopy(v2), deepcopy(c2)
             _apply(target, hh, vv, cc)
             after = _count(hh, edges, vv, cc, cj, potential)

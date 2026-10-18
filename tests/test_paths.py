@@ -38,3 +38,17 @@ def test_stolen_credentials_make_hosts_breachable():
     assert count_viable_paths(hosts, edges, vulns, [cred], "J")[0] == 2
     cred.rotated = True
     assert count_viable_paths(hosts, edges, vulns, [cred], "J")[0] == 0
+
+
+def test_dense_graph_is_bounded_by_budget():
+    # a 40-node mesh with an unreachable crown jewel used to enumerate ~40^8 simple paths
+    n = 40
+    hosts = [Host(id="I", name="I", kind="internet", zone="internet", compromised=True),
+             Host(id="J", name="J", kind="database", zone="restricted")]
+    hosts += [Host(id=f"H{i}", name=f"H{i}", kind="server", zone="corp") for i in range(n)]
+    edges = [Edge(src="I", dst=f"H{i}") for i in range(n)]
+    edges += [Edge(src=f"H{i}", dst=f"H{j}") for i in range(n) for j in range(n) if i != j]
+    vulns = [Vuln(id=f"v{i}", host=f"H{i}", cve_label="X", name="x", severity=9,
+                  exploitability=.5, noise=.2) for i in range(n)]
+    count, _, capped = count_viable_paths(hosts, edges, vulns, [], "J", budget=10_000)
+    assert count == 0 and capped

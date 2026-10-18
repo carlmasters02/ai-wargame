@@ -195,6 +195,8 @@ def create_app() -> FastAPI:
                 spec = importer.import_csv(content)
         except importer.ImportError as e:
             return JSONResponse({"error": f"import failed: {e}"}, status_code=400)
+        except (ValueError, TypeError, AttributeError, KeyError):  # malformed structure
+            return JSONResponse({"error": "import failed: malformed input"}, status_code=400)
         await engine.load_network(spec)
         return {"hosts": len(engine.hosts), "crown_jewel": engine.cj,
                 "edges": len(engine.edges), "vulns": len(engine.vulns),
