@@ -118,7 +118,7 @@ def test_malformed_imports_are_rejected_not_crashed(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from app import main
     monkeypatch.setattr(main.bus, "record_dir", str(tmp_path))
-    with TestClient(main.app, base_url="http://localhost") as c:
+    with TestClient(main.app, base_url="http://localhost", client=("127.0.0.1", 50000)) as c:
         bad = [("nmap", '<nmaprun><host><address addr="1.2.3.4" addrtype="ipv4"/><ports>'
                         '<port portid="x"><state state="open"/></port></ports></host></nmaprun>'),
                ("bloodhound", '{"computers": [1, 2], "users": "x"}'),

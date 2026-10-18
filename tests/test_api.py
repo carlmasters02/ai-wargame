@@ -9,7 +9,7 @@ from app.config import settings
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main.bus, "record_dir", str(tmp_path))
-    with TestClient(main.app, base_url="http://localhost") as c:
+    with TestClient(main.app, base_url="http://localhost", client=("127.0.0.1", 50000)) as c:
         yield c
 
 
@@ -83,3 +83,17 @@ def test_guard_blocks_rebinding_csrf_and_oversized_bodies(client, monkeypatch):
     monkeypatch.setattr(settings, "WARGAME_TOKEN", "s3cret")
     assert client.get("/api/state", headers={"host": "wargame.example"}).status_code == 200
     assert client.post("/api/pause?token=s3cret").status_code == 401
+
+
+def test_open_mode_refuses_network_clients_even_with_forged_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(main.bus, "record_dir", str(tmp_path))
+    with TestClient(main.app, base_url="http://localhost", client=("192.168.1.50", 50000)) as lan:
+        assert lan.post("/api/pause").status_code == 403          # Host: localhost, LAN peer
+        assert lan.get("/api/state").status_code == 403
+        monkeypatch.setattr(settings, "WARGAME_TOKEN", "s3cret")  # with a token, LAN is fine
+        assert lan.post("/api/pause", headers={"X-Wargame-Token": "s3cret"}).status_code == 200
+        monkeypatch.setattr(settings, "WARGAME_TOKEN", "")
+    with TestClient(main.app, base_url="http://localhost", client=("::ffff:127.0.0.1", 1)) as v6:
+        assert v6.get("/api/state").status_code == 200            # IPv4-mapped loopback
+        # a local reverse proxy forwarding remote traffic must use a token
+        assert v6.get("/api/state", headers={"x-forwarded-for": "203.0.113.9"}).status_code == 403

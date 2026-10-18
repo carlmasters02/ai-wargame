@@ -52,9 +52,13 @@ docker build -t ai-wargame .
 docker run -p 127.0.0.1:8000:8000 --env-file .env ai-wargame
 ```
 
-> **Security.** Without `WARGAME_TOKEN` the server is for local use: it only answers
-> requests addressed to `localhost`, and refuses state changes from other sites' pages.
-> To expose it on a network, set a long random `WARGAME_TOKEN` (e.g.
+The container prints a `http://localhost:8000/#token=…` link to open (a fresh token
+each start unless you pass `-e WARGAME_TOKEN=…`).
+
+> **Security.** Without `WARGAME_TOKEN` the server is for local use: it only serves
+> connections from the same machine (loopback) addressed to `localhost`, refuses
+> proxied requests, and refuses state changes from other sites' pages.
+> To expose it on a network or behind a reverse proxy, set a long random `WARGAME_TOKEN` (e.g.
 > `python -c "import secrets; print(secrets.token_urlsafe(32))"`), put it behind TLS,
 > and open the page once as `http://host:8000/#token=<token>`. Spectating (the page,
 > `/ws`, `GET` endpoints) stays public by design and shows the full god-view.
@@ -81,7 +85,7 @@ All settings live in `.env` (copy `.env.example`). Every value is optional.
 | `DEFENDER_MODEL` | `kimi-k2` | Starting model for BLUE. |
 | `REPORT_MODEL` | `kimi-k2` | Model that writes the after-action report. |
 | `REPORT_TIMEOUT` | `180` | Seconds per model for the streamed after-action report. |
-| `WARGAME_TOKEN` | *(empty)* | If set, every control endpoint requires it as the `X-Wargame-Token` header (the page picks it up from `#token=` in its URL). Spectating never does. Empty = local-only: the server answers `localhost` requests only. Required to expose the server. |
+| `WARGAME_TOKEN` | *(empty)* | If set, every control endpoint requires it as the `X-Wargame-Token` header (the page picks it up from `#token=` in its URL). Spectating never does. Empty = local-only: the server serves loopback connections to `localhost` only. Required to expose the server (the Docker image generates one if unset). |
 | `MODEL_PROVIDERS` | `{}` | JSON provider map for cross-provider benchmarking (see §12). A model id `openai:gpt-4o` routes to the named provider; a bare id uses ai&. |
 | `NEO4J_URI` | *(empty)* | Neo4j Aura URI, e.g. `neo4j+s://xxxx.databases.neo4j.io`. |
 | `NEO4J_USER` (or `NEO4J_USERNAME`) | `neo4j` | On Aura this is the **instance ID**, not `neo4j`. |

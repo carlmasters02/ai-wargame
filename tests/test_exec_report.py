@@ -21,7 +21,7 @@ def test_executive_report_renders_html(make_engine):
 
 def test_exec_endpoint_renders_after_a_match(tmp_path, monkeypatch):
     monkeypatch.setattr(main.bus, "record_dir", str(tmp_path))
-    with TestClient(main.app, base_url="http://localhost") as c:
+    with TestClient(main.app, base_url="http://localhost", client=("127.0.0.1", 50000)) as c:
         assert c.get("/api/report/executive").status_code == 404  # no match yet
         c.post("/api/reset", json={"seed": 8})
         c.post("/api/step")  # one turn is enough for turns to be non-empty

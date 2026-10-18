@@ -11,6 +11,7 @@ Without a token the server only answers requests addressed to localhost (see Gua
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -56,6 +57,14 @@ SECURITY_HEADERS = [
 ]
 
 
+def _loopback_client(scope) -> bool:
+    try:
+        ip = ipaddress.ip_address((scope.get("client") or ("",))[0])
+    except ValueError:
+        return False  # unix socket / unknown peer: fail closed
+    return ip.is_loopback or bool(getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback)
+
+
 def _hostname(netloc: str) -> str:
     try:
         return urlsplit("//" + netloc).hostname or ""
@@ -66,8 +75,9 @@ def _hostname(netloc: str) -> str:
 class Guard:
     """Runs in front of every HTTP and WebSocket request.
 
-    - Open mode (no WARGAME_TOKEN) answers loopback Host names only: a DNS-rebinding
-      page can't drive a local server, and an exposed one fails closed.
+    - Open mode (no WARGAME_TOKEN) serves only loopback connections addressed to a
+      loopback Host name: a network client is refused even if it forges `Host`, and a
+      DNS-rebinding page can't drive a local server. Proxied requests are refused too.
     - State changes and WebSocket upgrades from another site's page (Origin != Host)
       are refused: no CSRF, no cross-site WebSocket hijacking.
     - Every HTTP response gets security headers (CSP, nosniff, no framing, no referrer).
@@ -82,7 +92,9 @@ class Guard:
         headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
         host, origin = headers.get("host", ""), headers.get("origin")
         reason = None
-        if not settings.WARGAME_TOKEN and _hostname(host) not in LOOPBACK:
+        if not settings.WARGAME_TOKEN and (
+                _hostname(host) not in LOOPBACK or not _loopback_client(scope)
+                or any(h in headers for h in ("x-forwarded-for", "forwarded", "x-real-ip"))):
             reason = "this server has no WARGAME_TOKEN, so it only serves localhost"
         elif origin is not None and (scope["type"] == "websocket"
                                      or scope["method"] not in SAFE_METHODS):

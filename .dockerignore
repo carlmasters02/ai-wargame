@@ -7,3 +7,5 @@ __pycache__
 replays/match_*.jsonl
 tests
 scripts
+data/match_history.json
+.pytest_cache

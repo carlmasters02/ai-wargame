@@ -1,7 +1,8 @@
 # AI Wargame — single-container deployment.
 # Build:  docker build -t ai-wargame .
 # Run:    docker run -p 127.0.0.1:8000:8000 --env-file .env ai-wargame
-# Exposed: add -e WARGAME_TOKEN=<long random secret>, then open http://host:8000/#token=<secret>
+#         then open the http://localhost:8000/#token=... link printed in the logs.
+#         For a fixed token: -e WARGAME_TOKEN=<long random secret>
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
@@ -20,6 +21,7 @@ RUN useradd --create-home wargame && chown -R wargame /app
 USER wargame
 
 EXPOSE 8000
-# Bound to all interfaces inside the container. Without WARGAME_TOKEN the app only
-# answers requests addressed to localhost, so set one before exposing it.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Traffic reaches a container from the Docker bridge, never from loopback, so the app's
+# token-less local mode can't serve it: without WARGAME_TOKEN a random one is generated
+# per start and the link to open is printed in the logs (like Jupyter).
+CMD ["sh", "-c", "if [ -z \"$WARGAME_TOKEN\" ]; then export WARGAME_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(24))'); echo \"WARGAME_TOKEN not set; generated one for this run. Open http://localhost:8000/#token=$WARGAME_TOKEN\"; fi; exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]

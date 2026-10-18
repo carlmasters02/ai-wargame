@@ -19,8 +19,11 @@ on `main`. Only the latest `main` is supported.
 
 What the server protects, and what it deliberately doesn't:
 
-- **Local-only by default.** With `WARGAME_TOKEN` unset, the server answers only
-  requests addressed to `localhost`. Exposing it on a network requires a token.
+- **Local-only by default.** With `WARGAME_TOKEN` unset, the server serves only
+  connections from the same machine (loopback) addressed to `localhost`, and
+  refuses proxied requests (`X-Forwarded-For` / `Forwarded` / `X-Real-IP`).
+  Exposing it on a network or behind a reverse proxy requires a token; the Docker
+  image generates one at start-up if none is set.
 - **Controls need the token.** Every state-changing endpoint requires the
   `X-Wargame-Token` header when a token is set. The page reads it once from
   `#token=…` in its URL; the fragment never reaches the server or its logs.
@@ -46,7 +49,8 @@ What the server protects, and what it deliberately doesn't:
 - **Replay mode** (`python -m app.replay`) is read-only and binds to
   `127.0.0.1` unless you pass `--host`.
 - **No TLS or rate limiting is built in.** Put the server behind a reverse proxy
-  that handles both if you expose it.
+  that handles both if you expose it, and set `WARGAME_TOKEN`. A proxy that hides
+  the client address (no forwarding headers) looks like a local connection.
 
 API keys (`AIAND_API_KEY`, `MODEL_PROVIDERS`) live only in your local `.env`,
 which is git-ignored. They are never sent to the browser.
