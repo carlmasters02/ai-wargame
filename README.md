@@ -725,11 +725,13 @@ app/
   db.py          Neo4j driver + background mirror
   queries.py     all Cypher
   config.py      settings from .env
-static/          index.html, app.js, style.css, vendored force-graph / Chart.js / marked
+static/          index.html, app.js, style.css, vendored force-graph / Chart.js / marked / DOMPurify
 data/            cve_intel.json (committed threat-intel cache)
 replays/         golden.jsonl + recorded matches
 benchmarks/      leaderboard.json / .md
 scripts/         see §16
+SECURITY.md      security model + how to report a vulnerability
+LICENSE          MIT
 ```
 
 ---
@@ -768,3 +770,9 @@ scripts/         see §16
 - **A hover tooltip doesn't appear.** Point at the node's dot rather than its
   label. Tooltips for nodes in the lower part of the map can be hidden behind
   the ATT&CK bar.
+
+## License
+
+[MIT](LICENSE) © 2026 Carl Masters. The libraries vendored in `static/vendor/` keep
+their own licenses (force-graph, Chart.js and marked: MIT; DOMPurify: Apache-2.0 / MPL-2.0).
+Security issues: see [SECURITY.md](SECURITY.md).
