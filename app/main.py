@@ -169,7 +169,7 @@ async def lifespan(_app: FastAPI):
     else:
         log.warning("AIAND_API_KEY not set — both sides will use heuristic policies")
     if settings.WARGAME_TOKEN:
-        log.info("control endpoints require WARGAME_TOKEN (open the page with ?token=...)")
+        log.info("control endpoints require WARGAME_TOKEN (open the page with #token=...)")
     engine.history_path = os.path.join(BASE, "data", "match_history.json")
     await engine.reset(settings.GAME_SEED)
     log.info("ready. open http://localhost:8000")
@@ -179,7 +179,10 @@ async def lifespan(_app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="AI Wargame", lifespan=lifespan)
+    # no auto-generated /docs, /redoc, /openapi.json: the API is documented in the README
+    # (and Swagger UI's CDN assets would be blocked by the CSP anyway)
+    app = FastAPI(title="AI Wargame", lifespan=lifespan,
+                  docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(Guard)
     app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
     guarded = [Depends(require_token)]

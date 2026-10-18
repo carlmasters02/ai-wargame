@@ -76,6 +76,8 @@ def test_guard_blocks_rebinding_csrf_and_oversized_bodies(client, monkeypatch):
     assert client.post("/api/import", content=big,
                        headers={"content-type": "application/json"}).status_code == 413
     # security headers on every response
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
     h = client.get("/").headers
     assert "frame-ancestors 'none'" in h["content-security-policy"]
     assert h["x-content-type-options"] == "nosniff"
