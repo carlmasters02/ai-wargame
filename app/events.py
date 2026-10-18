@@ -6,6 +6,7 @@ same WS contract, so a recorded match is a perfect offline fallback.
 """
 from __future__ import annotations
 
+import asyncio
 import glob
 import json
 import logging
@@ -15,6 +16,8 @@ import time
 log = logging.getLogger("events")
 
 KEEP_RECORDINGS = 50  # newest match_*.jsonl files kept; older ones are pruned
+MAX_CLIENTS = 100     # /ws is unauthenticated (spectating), so bound it
+SEND_TIMEOUT = 5.0    # seconds; a client that stops reading is dropped, not waited on
 
 class Broadcaster:
     def __init__(self, record_dir: str = "replays", keep: int = KEEP_RECORDINGS):
@@ -28,9 +31,13 @@ class Broadcaster:
     def recording(self) -> bool:
         return self._fh is not None
 
-    async def connect(self, ws) -> None:
+    async def connect(self, ws) -> bool:
+        if len(self.clients) >= MAX_CLIENTS:
+            await ws.close(code=1013)  # try again later
+            return False
         await ws.accept()
         self.clients.add(ws)
+        return True
 
     def disconnect(self, ws) -> None:
         self.clients.discard(ws)
@@ -74,12 +81,12 @@ class Broadcaster:
 
     async def emit(self, type_: str, payload: dict) -> None:
         msg = json.dumps({"type": type_, "payload": payload}, ensure_ascii=False, default=str)
-        dead = []
-        for ws in list(self.clients):
+
+        async def send(ws):
             try:
-                await ws.send_text(msg)
-            except Exception:  # noqa: BLE001
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+                await asyncio.wait_for(ws.send_text(msg), SEND_TIMEOUT)
+            except Exception:  # noqa: BLE001 — closed, broken or too slow
+                self.disconnect(ws)
+
+        await asyncio.gather(*(send(ws) for ws in list(self.clients)))
         self.record(type_, payload)

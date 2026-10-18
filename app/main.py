@@ -5,8 +5,8 @@ runs (single-writer rule); control flags (pause/resume/step/speed) and model or
 persona swaps are safe to apply directly.
 
 If WARGAME_TOKEN is set, every state-changing endpoint requires it (header
-`X-Wargame-Token`, or `?token=`). Spectating — the page, /ws and GET endpoints —
-never does.
+`X-Wargame-Token`). Spectating — the page, /ws and GET endpoints — never does.
+Without a token the server only answers requests addressed to localhost (see Guard).
 """
 from __future__ import annotations
 
@@ -15,7 +15,9 @@ import json
 import logging
 import math
 import os
+import re
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -40,19 +42,91 @@ engine: GameEngine | None = None
 available_models: list[str] = []
 
 
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+MAX_BODY = 2_500_000  # bytes; the largest legitimate body is a 2 MB network import
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"content-security-policy",
+     b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+     b"img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+     b"frame-ancestors 'none'; form-action 'self'"),
+]
+
+
+def _hostname(netloc: str) -> str:
+    try:
+        return urlsplit("//" + netloc).hostname or ""
+    except ValueError:
+        return ""
+
+
+class Guard:
+    """Runs in front of every HTTP and WebSocket request.
+
+    - Open mode (no WARGAME_TOKEN) answers loopback Host names only: a DNS-rebinding
+      page can't drive a local server, and an exposed one fails closed.
+    - State changes and WebSocket upgrades from another site's page (Origin != Host)
+      are refused: no CSRF, no cross-site WebSocket hijacking.
+    - Every HTTP response gets security headers (CSP, nosniff, no framing, no referrer).
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+        host, origin = headers.get("host", ""), headers.get("origin")
+        reason = None
+        if not settings.WARGAME_TOKEN and _hostname(host) not in LOOPBACK:
+            reason = "this server has no WARGAME_TOKEN, so it only serves localhost"
+        elif origin is not None and (scope["type"] == "websocket"
+                                     or scope["method"] not in SAFE_METHODS):
+            try:
+                same = urlsplit(origin).netloc == host
+            except ValueError:
+                same = False
+            if not same:
+                reason = "cross-origin request refused"
+        if reason:
+            if scope["type"] == "websocket":
+                await receive()  # websocket.connect
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            return await JSONResponse({"error": reason}, status_code=403)(scope, receive, send)
+        if scope["type"] == "websocket":
+            return await self.app(scope, receive, send)
+
+        async def send_secured(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = list(message.get("headers", [])) + SECURITY_HEADERS
+            await send(message)
+        return await self.app(scope, receive, send_secured)
+
+
 def require_token(request: Request) -> None:
-    """Gate state-changing endpoints behind WARGAME_TOKEN when one is configured."""
+    """Gate state-changing endpoints behind WARGAME_TOKEN when one is configured.
+    Header only: a token in the URL would land in access logs and browser history."""
     if not settings.WARGAME_TOKEN:
         return
-    given = request.headers.get("x-wargame-token") or request.query_params.get("token") or ""
-    if not hmac.compare_digest(given, settings.WARGAME_TOKEN):
+    given = request.headers.get("x-wargame-token") or ""
+    if not hmac.compare_digest(given.encode(), settings.WARGAME_TOKEN.encode()):
         raise HTTPException(status_code=401, detail="valid X-Wargame-Token required")
 
 
 async def _body(request: Request) -> dict:
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > MAX_BODY:
+            raise HTTPException(status_code=413, detail="request body too large")
     try:
-        data = await request.json()
-    except Exception:  # noqa: BLE001 — empty or non-JSON body
+        data = json.loads(raw) if raw else {}
+    except ValueError:  # non-JSON body
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -94,6 +168,7 @@ async def lifespan(_app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="AI Wargame", lifespan=lifespan)
+    app.add_middleware(Guard)
     app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
     guarded = [Depends(require_token)]
 
@@ -103,7 +178,8 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
-        await bus.connect(websocket)
+        if not await bus.connect(websocket):
+            return
         try:
             await websocket.send_json({"type": "graph_snapshot", "payload": engine.snapshot()})
             await websocket.send_json({"type": "metrics", "payload": engine.compute_metrics()})
@@ -217,11 +293,13 @@ def create_app() -> FastAPI:
     async def model_swap(request: Request):
         body = await _body(request)
         side, model = body.get("side"), body.get("model")
-        if side not in ("red", "blue") or not model or not isinstance(model, str):
+        if side not in ("red", "blue") or not isinstance(model, str) \
+                or not re.fullmatch(r"[A-Za-z0-9._:/@-]{1,128}", model):
             return JSONResponse({"error": "side + model required"}, status_code=400)
         if engine.agents[side] is None:
             return JSONResponse({"error": "LLM not configured (heuristic mode)"}, status_code=409)
-        if ":" not in model and available_models and model not in available_models:
+        routed = ":" in model and model.split(":", 1)[0] in settings.providers
+        if not routed and available_models and model not in available_models:
             return JSONResponse({"error": f"unknown model {model!r}"}, status_code=400)
         await engine.run_command("model_swap", {"side": side, "model": model})  # no graph mutation
         return {"queued": True}

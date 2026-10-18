@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 import app.main as main
 from app.config import settings
@@ -8,12 +9,12 @@ from app.config import settings
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main.bus, "record_dir", str(tmp_path))
-    with TestClient(main.app) as c:
+    with TestClient(main.app, base_url="http://localhost") as c:
         yield c
 
 
 def test_websocket_opens_with_full_state(client):
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("ws://localhost/ws") as ws:
         kinds = [ws.receive_json()["type"] for _ in range(3)]
     assert kinds == ["graph_snapshot", "metrics", "status"]
 
@@ -59,3 +60,26 @@ def test_config_endpoint(client):
     r = client.post("/api/config", json={"difficulty": "hard", "max_turns": 15})
     assert r.status_code == 200 and r.json()["difficulty"] == "hard" and r.json()["max_turns"] == 15
     client.post("/api/config", json={"difficulty": "normal", "max_turns": 20})
+
+
+def test_guard_blocks_rebinding_csrf_and_oversized_bodies(client, monkeypatch):
+    # open mode: only loopback Host names are served (DNS rebinding / accidental exposure)
+    assert client.get("/api/state", headers={"host": "evil.example"}).status_code == 403
+    # a foreign page can't drive the server, but the app's own page can
+    assert client.post("/api/pause", headers={"origin": "http://evil.example"}).status_code == 403
+    assert client.post("/api/pause", headers={"origin": "http://localhost"}).status_code == 200
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("ws://localhost/ws", headers={"origin": "http://evil.example"}) as ws:
+            ws.receive_json()
+    # bodies are capped before parsing
+    big = '{"format": "csv", "content": "' + "x" * (main.MAX_BODY + 10) + '"}'
+    assert client.post("/api/import", content=big,
+                       headers={"content-type": "application/json"}).status_code == 413
+    # security headers on every response
+    h = client.get("/").headers
+    assert "frame-ancestors 'none'" in h["content-security-policy"]
+    assert h["x-content-type-options"] == "nosniff"
+    # with a token: any Host is served, and the token is only accepted as a header
+    monkeypatch.setattr(settings, "WARGAME_TOKEN", "s3cret")
+    assert client.get("/api/state", headers={"host": "wargame.example"}).status_code == 200
+    assert client.post("/api/pause?token=s3cret").status_code == 401
